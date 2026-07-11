@@ -72,6 +72,9 @@ export default function Login() {
             <input required type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)}
               data-testid="login-password"
               className="w-full rounded-lg bg-[#0D0E10] border border-white/10 px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition-colors duration-200"/>
+            <div className="flex justify-end -mt-1">
+              <Link to="/forgot-password" className="text-xs text-neutral-500 hover:text-indigo-300 transition-colors" data-testid="login-forgot-link">Forgot password?</Link>
+            </div>
             <button disabled={loading} data-testid="login-submit"
               className="w-full btn-primary inline-flex items-center justify-center gap-2">
               {loading ? <Loader2 className="h-4 w-4 animate-spin"/> : <>Sign in <ArrowRight className="h-4 w-4"/></>}

@@ -3,6 +3,7 @@ import os
 import io
 import json
 import uuid
+import secrets
 import logging
 import asyncio
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import List, Optional, Dict, Any
 import jwt as pyjwt
 import bcrypt
 import httpx
+import resend
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Request, Response, Cookie, Header
@@ -42,6 +44,16 @@ JWT_SECRET = os.environ['JWT_SECRET']
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
 UPLOAD_DIR = Path(os.environ['UPLOAD_DIR'])
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
+APP_URL = os.environ.get('APP_URL', '')
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+
+# Brute-force protection
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -96,6 +108,21 @@ class SignupIn(BaseModel):
 class LoginIn(BaseModel):
     email: EmailStr; password: str
 
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+class ResetPasswordIn(BaseModel):
+    token: str; new_password: str = Field(min_length=6)
+
+class ChangePasswordIn(BaseModel):
+    current_password: str; new_password: str = Field(min_length=6)
+
+class VerifyEmailIn(BaseModel):
+    token: str
+
+class ResendVerificationIn(BaseModel):
+    email: EmailStr
+
 class ChatMessageIn(BaseModel):
     message: str; dataset_id: Optional[str] = None; conversation_id: Optional[str] = None
     model: Optional[str] = None  # "claude" | "openai"
@@ -122,6 +149,46 @@ class CleanIn(BaseModel):
     remove_outliers: bool = False
 
 
+# ---------- Email helper ----------
+def _email_shell(title: str, preheader: str, body_html: str, cta_url: Optional[str] = None, cta_label: Optional[str] = None) -> str:
+    button = ""
+    if cta_url and cta_label:
+        button = f"""
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0"><tr>
+          <td style="border-radius:9999px;background:#6366F1">
+            <a href="{cta_url}" style="display:inline-block;padding:12px 24px;color:#fff;text-decoration:none;font-family:'IBM Plex Sans',Arial,sans-serif;font-weight:600;font-size:14px;border-radius:9999px">{cta_label}</a>
+          </td>
+        </tr></table>"""
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"/><title>{title}</title></head>
+<body style="margin:0;background:#0D0E10;font-family:'IBM Plex Sans',Arial,sans-serif;color:#E6E6E7">
+<div style="display:none;font-size:1px;color:#0D0E10">{preheader}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0D0E10;padding:32px 0">
+<tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="background:#151619;border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:32px">
+<tr><td>
+<div style="font-family:'IBM Plex Sans',Arial,sans-serif;font-weight:700;font-size:18px;color:#fff">DataMind<span style="color:#818CF8">.ai</span></div>
+<div style="height:1px;background:rgba(255,255,255,0.06);margin:20px 0"></div>
+<h1 style="margin:0;font-size:22px;font-weight:700;color:#fff;letter-spacing:-0.01em">{title}</h1>
+<div style="margin-top:16px;font-size:14px;line-height:1.6;color:#c9c9cb">{body_html}</div>
+{button}
+<div style="margin-top:24px;font-size:12px;color:#8F8F91">If you did not request this, ignore this email.</div>
+</td></tr></table>
+<div style="margin-top:16px;font-size:11px;color:#52525B;font-family:'JetBrains Mono',monospace">© DataMind AI</div>
+</td></tr></table></body></html>"""
+
+
+async def send_email(to: str, subject: str, html: str) -> None:
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not set; skipping email to %s (%s)", to, subject)
+        return
+    params = {"from": SENDER_EMAIL, "to": [to], "subject": subject, "html": html}
+    try:
+        await asyncio.to_thread(resend.Emails.send, params)
+    except Exception as e:
+        logger.error("Failed sending email to %s: %s", to, e)
+
+
 # ---------- Auth ----------
 @api.post("/auth/signup")
 async def signup(body: SignupIn):
@@ -130,19 +197,151 @@ async def signup(body: SignupIn):
     uid = new_id("user")
     doc = {"user_id": uid, "email": body.email.lower(), "name": body.name,
            "password_hash": hash_pw(body.password), "picture": None, "plan": "free",
-           "provider": "email", "created_at": now_utc().isoformat()}
+           "provider": "email", "email_verified": False,
+           "failed_attempts": 0, "locked_until": None,
+           "created_at": now_utc().isoformat()}
     await db.users.insert_one(doc)
+
+    # Generate verification token & send email (best-effort)
+    token = secrets.token_urlsafe(32)
+    await db.email_tokens.insert_one({
+        "token": token, "user_id": uid, "email": body.email.lower(), "type": "verify",
+        "expires_at": (now_utc() + timedelta(hours=24)).isoformat(),
+        "used": False, "created_at": now_utc().isoformat(),
+    })
+    verify_url = f"{APP_URL}/verify-email?token={token}"
+    html = _email_shell(
+        "Verify your email",
+        "Confirm your DataMind AI account",
+        f"<p>Hi {body.name}, welcome to DataMind AI.</p><p>Please verify your email address to activate your workspace. This link expires in 24 hours.</p>",
+        cta_url=verify_url, cta_label="Verify email",
+    )
+    await send_email(body.email.lower(), "Verify your DataMind AI account", html)
+
     doc.pop("password_hash", None); doc.pop("_id", None)
     return {"token": make_jwt(uid), "user": doc}
 
 
 @api.post("/auth/login")
 async def login(body: LoginIn):
-    u = await db.users.find_one({"email": body.email.lower()}, {"_id": 0})
-    if not u or not u.get("password_hash") or not verify_pw(body.password, u["password_hash"]):
+    email = body.email.lower()
+    u = await db.users.find_one({"email": email}, {"_id": 0})
+    if not u or not u.get("password_hash"):
         raise HTTPException(401, "Invalid email or password")
+
+    # Lockout check
+    locked_until = u.get("locked_until")
+    if locked_until:
+        lu = datetime.fromisoformat(locked_until) if isinstance(locked_until, str) else locked_until
+        if lu.tzinfo is None: lu = lu.replace(tzinfo=timezone.utc)
+        if lu > now_utc():
+            secs = int((lu - now_utc()).total_seconds())
+            raise HTTPException(423, f"Account locked. Try again in {secs // 60 + 1} min.")
+
+    if not verify_pw(body.password, u["password_hash"]):
+        attempts = int(u.get("failed_attempts", 0)) + 1
+        update = {"failed_attempts": attempts}
+        if attempts >= MAX_FAILED_ATTEMPTS:
+            update["locked_until"] = (now_utc() + timedelta(minutes=LOCKOUT_MINUTES)).isoformat()
+            update["failed_attempts"] = 0
+        await db.users.update_one({"user_id": u["user_id"]}, {"$set": update})
+        left = max(0, MAX_FAILED_ATTEMPTS - attempts)
+        detail = f"Invalid email or password. {left} attempt(s) left before lockout." if left else f"Too many failed attempts. Locked for {LOCKOUT_MINUTES} min."
+        raise HTTPException(401, detail)
+
+    # Success: reset counters
+    await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"failed_attempts": 0, "locked_until": None}})
     u.pop("password_hash", None)
     return {"token": make_jwt(u["user_id"]), "user": u}
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordIn):
+    email = body.email.lower()
+    u = await db.users.find_one({"email": email}, {"_id": 0})
+    # Always respond ok to avoid email enumeration
+    if u and u.get("password_hash"):
+        token = secrets.token_urlsafe(32)
+        await db.email_tokens.insert_one({
+            "token": token, "user_id": u["user_id"], "email": email, "type": "reset",
+            "expires_at": (now_utc() + timedelta(hours=1)).isoformat(),
+            "used": False, "created_at": now_utc().isoformat(),
+        })
+        reset_url = f"{APP_URL}/reset-password?token={token}"
+        html = _email_shell(
+            "Reset your password",
+            "Choose a new DataMind AI password",
+            f"<p>Hi {u.get('name','')},</p><p>Click the button below to set a new password. This link expires in 1 hour.</p>",
+            cta_url=reset_url, cta_label="Reset password",
+        )
+        await send_email(email, "Reset your DataMind AI password", html)
+    return {"ok": True, "message": "If an account exists, a reset link has been sent."}
+
+
+@api.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordIn):
+    doc = await db.email_tokens.find_one({"token": body.token, "type": "reset"}, {"_id": 0})
+    if not doc or doc.get("used"):
+        raise HTTPException(400, "Invalid or already-used token")
+    exp = doc["expires_at"]
+    if isinstance(exp, str): exp = datetime.fromisoformat(exp)
+    if exp.tzinfo is None: exp = exp.replace(tzinfo=timezone.utc)
+    if exp < now_utc():
+        raise HTTPException(400, "Token expired")
+    await db.users.update_one(
+        {"user_id": doc["user_id"]},
+        {"$set": {"password_hash": hash_pw(body.new_password), "failed_attempts": 0, "locked_until": None}}
+    )
+    await db.email_tokens.update_one({"token": body.token}, {"$set": {"used": True, "used_at": now_utc().isoformat()}})
+    return {"ok": True}
+
+
+@api.post("/auth/change-password")
+async def change_password(body: ChangePasswordIn, user=Depends(get_current_user)):
+    u = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not u or not u.get("password_hash"):
+        raise HTTPException(400, "No password set on this account (social login)")
+    if not verify_pw(body.current_password, u["password_hash"]):
+        raise HTTPException(401, "Current password is incorrect")
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"password_hash": hash_pw(body.new_password)}})
+    return {"ok": True}
+
+
+@api.post("/auth/verify-email")
+async def verify_email(body: VerifyEmailIn):
+    doc = await db.email_tokens.find_one({"token": body.token, "type": "verify"}, {"_id": 0})
+    if not doc or doc.get("used"):
+        raise HTTPException(400, "Invalid or already-used token")
+    exp = doc["expires_at"]
+    if isinstance(exp, str): exp = datetime.fromisoformat(exp)
+    if exp.tzinfo is None: exp = exp.replace(tzinfo=timezone.utc)
+    if exp < now_utc():
+        raise HTTPException(400, "Token expired")
+    await db.users.update_one({"user_id": doc["user_id"]}, {"$set": {"email_verified": True}})
+    await db.email_tokens.update_one({"token": body.token}, {"$set": {"used": True, "used_at": now_utc().isoformat()}})
+    return {"ok": True}
+
+
+@api.post("/auth/resend-verification")
+async def resend_verification(body: ResendVerificationIn):
+    email = body.email.lower()
+    u = await db.users.find_one({"email": email}, {"_id": 0})
+    if u and not u.get("email_verified"):
+        token = secrets.token_urlsafe(32)
+        await db.email_tokens.insert_one({
+            "token": token, "user_id": u["user_id"], "email": email, "type": "verify",
+            "expires_at": (now_utc() + timedelta(hours=24)).isoformat(),
+            "used": False, "created_at": now_utc().isoformat(),
+        })
+        verify_url = f"{APP_URL}/verify-email?token={token}"
+        html = _email_shell(
+            "Verify your email",
+            "Confirm your DataMind AI account",
+            f"<p>Hi {u.get('name','')},</p><p>Here's a fresh link to verify your email. Expires in 24 hours.</p>",
+            cta_url=verify_url, cta_label="Verify email",
+        )
+        await send_email(email, "Verify your DataMind AI account", html)
+    return {"ok": True}
 
 
 @api.post("/auth/google/session")
@@ -640,6 +839,8 @@ async def ensure_indexes():
     await db.chat_messages.create_index([("conversation_id", 1), ("created_at", 1)])
     await db.reports.create_index("report_id", unique=True)
     await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
+    await db.email_tokens.create_index("token", unique=True)
+    await db.email_tokens.create_index("email")
     logger.info("DataMind AI backend ready")
 
 

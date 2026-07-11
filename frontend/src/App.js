@@ -8,6 +8,9 @@ import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import AuthCallback from "@/pages/AuthCallback";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
+import VerifyEmail from "@/pages/VerifyEmail";
 import DashboardLayout from "@/pages/DashboardLayout";
 import DashboardHome from "@/pages/DashboardHome";
 import DatasetsPage from "@/pages/DatasetsPage";
@@ -39,6 +42,9 @@ function AppRouter() {
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/app" element={<Protected><DashboardLayout /></Protected>}>
         <Route index element={<DashboardHome />} />
         <Route path="datasets" element={<DatasetsPage />} />

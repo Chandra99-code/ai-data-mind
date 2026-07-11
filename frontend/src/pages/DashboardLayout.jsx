@@ -1,7 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell } from "lucide-react";
+import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound } from "lucide-react";
+import ChangePasswordDialog from "@/components/app/ChangePasswordDialog";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 
 const nav = [
   { to: "/app", icon: Home, label: "Overview", end: true, testid: "nav-overview" },
@@ -14,6 +16,7 @@ const nav = [
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
   const nav_ = useNavigate();
+  const [cpOpen, setCpOpen] = useState(false);
 
   const doLogout = async () => { await logout(); nav_("/", { replace: true }); };
 
@@ -38,24 +41,36 @@ export default function DashboardLayout() {
           ))}
         </nav>
         <div className="p-3 border-t border-white/[0.06]">
-          <div className="flex items-center gap-3 px-2 py-2 rounded-md">
-            {user?.picture ? (
-              <img src={user.picture} alt="" className="h-8 w-8 rounded-full object-cover"/>
-            ) : (
-              <div className="h-8 w-8 rounded-full flex items-center justify-center bg-indigo-500/20 text-indigo-200 font-mono text-sm">
-                {(user?.name || user?.email || "?")[0].toUpperCase()}
-              </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <div className="text-sm truncate">{user?.name || "User"}</div>
-              <div className="text-xs text-neutral-500 truncate">{user?.email}</div>
-            </div>
-            <button onClick={doLogout} data-testid="logout-btn" className="text-neutral-500 hover:text-white p-1.5 rounded-md hover:bg-white/[0.05] transition-colors">
-              <LogOut className="h-4 w-4" strokeWidth={1.5}/>
-            </button>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="w-full flex items-center gap-3 px-2 py-2 rounded-md hover:bg-white/[0.03] transition-colors" data-testid="user-menu-btn">
+                {user?.picture ? (
+                  <img src={user.picture} alt="" className="h-8 w-8 rounded-full object-cover"/>
+                ) : (
+                  <div className="h-8 w-8 rounded-full flex items-center justify-center bg-indigo-500/20 text-indigo-200 font-mono text-sm">
+                    {(user?.name || user?.email || "?")[0].toUpperCase()}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0 text-left">
+                  <div className="text-sm truncate">{user?.name || "User"}</div>
+                  <div className="text-xs text-neutral-500 truncate">{user?.email}</div>
+                </div>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="end" className="bg-[#151619] border border-white/10 text-neutral-200 w-56">
+              <DropdownMenuItem onClick={()=>setCpOpen(true)} data-testid="menu-change-password" className="cursor-pointer focus:bg-white/5">
+                <KeyRound className="h-4 w-4 mr-2" strokeWidth={1.5}/> Change password
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="bg-white/10"/>
+              <DropdownMenuItem onClick={doLogout} data-testid="menu-logout" className="cursor-pointer focus:bg-white/5 text-red-300 focus:text-red-200">
+                <LogOut className="h-4 w-4 mr-2" strokeWidth={1.5}/> Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </aside>
+
+      <ChangePasswordDialog open={cpOpen} onOpenChange={setCpOpen}/>
 
       {/* Main */}
       <main className="min-w-0">
