@@ -123,6 +123,9 @@ class VerifyEmailIn(BaseModel):
 class ResendVerificationIn(BaseModel):
     email: EmailStr
 
+class SetPasswordIn(BaseModel):
+    new_password: str = Field(min_length=6)
+
 class ChatMessageIn(BaseModel):
     message: str; dataset_id: Optional[str] = None; conversation_id: Optional[str] = None
     model: Optional[str] = None  # "claude" | "openai"
@@ -189,6 +192,20 @@ async def send_email(to: str, subject: str, html: str) -> None:
         logger.error("Failed sending email to %s: %s", to, e)
 
 
+def _providers(u: dict) -> List[str]:
+    """Derive auth providers for a user document."""
+    provs = u.get("providers")
+    if isinstance(provs, list) and provs:
+        return provs
+    # Backwards-compat derivation
+    result = []
+    if u.get("password_hash"):
+        result.append("email")
+    if u.get("provider") == "google" and "google" not in result:
+        result.append("google")
+    return result or [u.get("provider", "email")]
+
+
 # ---------- Auth ----------
 @api.post("/auth/signup")
 async def signup(body: SignupIn):
@@ -197,7 +214,7 @@ async def signup(body: SignupIn):
     uid = new_id("user")
     doc = {"user_id": uid, "email": body.email.lower(), "name": body.name,
            "password_hash": hash_pw(body.password), "picture": None, "plan": "free",
-           "provider": "email", "email_verified": False,
+           "providers": ["email"], "provider": "email", "email_verified": False,
            "failed_attempts": 0, "locked_until": None,
            "created_at": now_utc().isoformat()}
     await db.users.insert_one(doc)
@@ -357,11 +374,19 @@ async def google_session(request: Request, response: Response):
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         uid = existing["user_id"]
-        await db.users.update_one({"user_id": uid}, {"$set": {"name": d.get("name"), "picture": d.get("picture")}})
+        provs = list(set(_providers(existing) + ["google"]))
+        await db.users.update_one(
+            {"user_id": uid},
+            {"$set": {"name": d.get("name"), "picture": d.get("picture"),
+                      "providers": provs, "google_linked_at": now_utc().isoformat(),
+                      "email_verified": True}},
+        )
     else:
         uid = new_id("user")
         await db.users.insert_one({"user_id": uid, "email": email, "name": d.get("name"),
                                     "picture": d.get("picture"), "provider": "google",
+                                    "providers": ["google"], "email_verified": True,
+                                    "google_linked_at": now_utc().isoformat(),
                                     "plan": "free", "created_at": now_utc().isoformat()})
     st = d["session_token"]
     await db.user_sessions.insert_one({"user_id": uid, "session_token": st,
@@ -369,13 +394,79 @@ async def google_session(request: Request, response: Response):
                                          "created_at": now_utc().isoformat()})
     response.set_cookie("session_token", st, httponly=True, secure=True, samesite="none", path="/", max_age=7*24*3600)
     u = await db.users.find_one({"user_id": uid}, {"_id": 0, "password_hash": 0})
+    if u: u["providers"] = _providers(u)
     return {"user": u}
 
 
 @api.get("/auth/me")
 async def me(user=Depends(get_current_user)):
     user.pop("password_hash", None)
+    user["providers"] = _providers(user)
+    user["has_password"] = bool(await db.users.find_one({"user_id": user["user_id"], "password_hash": {"$exists": True, "$ne": None}}))
     return user
+
+
+@api.post("/auth/link-google")
+async def link_google(request: Request, user=Depends(get_current_user)):
+    """Link a Google account to the currently signed-in user.
+    Requires the Emergent OAuth session_id (from the fragment) as X-Session-ID header.
+    The Google email must match the current user's email.
+    """
+    sid = request.headers.get("X-Session-ID")
+    if not sid:
+        raise HTTPException(400, "Missing X-Session-ID")
+    async with httpx.AsyncClient(timeout=10.0) as h:
+        r = await h.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": sid})
+    if r.status_code != 200:
+        raise HTTPException(401, "Invalid Google session")
+    d = r.json()
+    google_email = d["email"].lower()
+    if google_email != user["email"].lower():
+        raise HTTPException(400, f"Google account email ({google_email}) does not match your account ({user['email']}). Sign in to the same email in Google.")
+    provs = list(set(_providers(user) + ["google"]))
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"providers": provs, "picture": d.get("picture") or user.get("picture"),
+                  "google_linked_at": now_utc().isoformat(), "email_verified": True}},
+    )
+    u = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
+    u["providers"] = _providers(u)
+    return {"ok": True, "user": u}
+
+
+@api.post("/auth/unlink-google")
+async def unlink_google(user=Depends(get_current_user)):
+    u = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not u:
+        raise HTTPException(404, "User not found")
+    if not u.get("password_hash"):
+        raise HTTPException(400, "Set a password first — you'd be locked out otherwise.")
+    provs = [p for p in _providers(u) if p != "google"]
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"providers": provs}, "$unset": {"google_linked_at": ""}},
+    )
+    # Invalidate any existing google-issued session tokens
+    await db.user_sessions.delete_many({"user_id": user["user_id"]})
+    u2 = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
+    u2["providers"] = _providers(u2)
+    return {"ok": True, "user": u2}
+
+
+@api.post("/auth/set-password")
+async def set_password(body: SetPasswordIn, user=Depends(get_current_user)):
+    """Allow social-login users to add a password to their account."""
+    u = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not u:
+        raise HTTPException(404, "User not found")
+    if u.get("password_hash"):
+        raise HTTPException(400, "A password is already set. Use change-password instead.")
+    provs = list(set(_providers(u) + ["email"]))
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"password_hash": hash_pw(body.new_password), "providers": provs}},
+    )
+    return {"ok": True}
 
 
 @api.post("/auth/logout")

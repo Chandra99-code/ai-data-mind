@@ -19,6 +19,7 @@ import ChatPage from "@/pages/ChatPage";
 import MLPage from "@/pages/MLPage";
 import ReportsPage from "@/pages/ReportsPage";
 import ReportDetail from "@/pages/ReportDetail";
+import SettingsPage from "@/pages/SettingsPage";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -54,6 +55,7 @@ function AppRouter() {
         <Route path="ml" element={<MLPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="reports/:id" element={<ReportDetail />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

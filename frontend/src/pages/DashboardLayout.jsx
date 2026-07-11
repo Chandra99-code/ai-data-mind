@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound } from "lucide-react";
+import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound, Settings } from "lucide-react";
 import ChangePasswordDialog from "@/components/app/ChangePasswordDialog";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 
@@ -58,6 +58,9 @@ export default function DashboardLayout() {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent side="top" align="end" className="bg-[#151619] border border-white/10 text-neutral-200 w-56">
+              <DropdownMenuItem onClick={()=>nav_("/app/settings")} data-testid="menu-settings" className="cursor-pointer focus:bg-white/5">
+                <Settings className="h-4 w-4 mr-2" strokeWidth={1.5}/> Account settings
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={()=>setCpOpen(true)} data-testid="menu-change-password" className="cursor-pointer focus:bg-white/5">
                 <KeyRound className="h-4 w-4 mr-2" strokeWidth={1.5}/> Change password
               </DropdownMenuItem>

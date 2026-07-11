@@ -1,0 +1,33 @@
+{
+  "summary": "Verified new Google link/unlink + set-password endpoints and Settings UI. All 7 backend pytest cases pass; all frontend data-testids and flows verified end-to-end for both a fresh email/password user and a simulated Google-only user (set-password then unlink transitions).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "startup", "issue": "FastAPI on_event('startup'/'shutdown') deprecated warnings - migrate to lifespan handlers"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_google_link.py",
+    "/app/test_reports/pytest/iter3_google_link.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SettingsPage.jsx: unlink flow uses window.confirm() — consider a styled AlertDialog for design consistency.",
+    "server.py is 940 lines; consider splitting auth/datasets/ml/chat into modules once feature velocity slows.",
+    "/api/auth/link-google should also short-circuit if user already has 'google' in providers (idempotent 200) for a smoother UX; currently it still re-hits Emergent OAuth which is fine but wasteful.",
+    "unlink-google deletes ALL user_sessions for the user (line 450). That signs the user out of all devices whether or not they were Google sessions. Consider marking google sessions with a flag and only deleting those; otherwise document behaviour."
+  ],
+  "updated_files": ["/app/backend/tests/test_google_link.py"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (all testids + flows)"},
+  "test_credentials": "Fresh users signed up per test run; Google-only user simulated via direct mongo insert + minted JWT.",
+  "seed_data_creation": "Test users prefixed with TEST_ are cleaned up after runs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 3 covered NEW endpoints only (link-google, unlink-google, set-password, /me providers+has_password) and the SettingsPage UI. Prior iterations covered core auth (iter 1, 2). Backend tests are idempotent and self-cleaning.",
+  "rca of the issue": "N/A — no issues found. All acceptance criteria from the review request met: providers=['email']+has_password:true for fresh signup, set-password 400 when already set, unlink-google idempotent for email-only users with password, link-google 400 without X-Session-ID and 401 with bogus SID, google-only user can set password (providers becomes ['google','email']) then unlink (providers becomes ['email']), Google-only user without password gets 400 'Set a password first...' guard, Settings UI shows correct rows/badges/buttons and Set-password dialog persists changes."
+}
