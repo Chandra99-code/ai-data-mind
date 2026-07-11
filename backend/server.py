@@ -98,6 +98,14 @@ class LoginIn(BaseModel):
 
 class ChatMessageIn(BaseModel):
     message: str; dataset_id: Optional[str] = None; conversation_id: Optional[str] = None
+    model: Optional[str] = None  # "claude" | "openai"
+
+
+AVAILABLE_MODELS = {
+    "claude": {"provider": "anthropic", "name": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5"},
+    "openai": {"provider": "openai", "name": "gpt-5.4", "label": "GPT-5.4"},
+}
+DEFAULT_MODEL_KEY = "claude"
 
 class MLRequestIn(BaseModel):
     dataset_id: str; target: str; task: str; features: Optional[List[str]] = None
@@ -395,13 +403,18 @@ async def chat_stream(body: ChatMessageIn, user=Depends(get_current_user)):
 
     await db.chat_messages.insert_one({"msg_id": new_id("m"), "conversation_id": conv_id,
         "user_id": user["user_id"], "role": "user", "content": body.message,
-        "dataset_id": body.dataset_id, "created_at": now_utc().isoformat()})
+        "dataset_id": body.dataset_id, "model": (body.model or DEFAULT_MODEL_KEY),
+        "created_at": now_utc().isoformat()})
 
+    model_key = (body.model or DEFAULT_MODEL_KEY).lower()
+    if model_key not in AVAILABLE_MODELS:
+        model_key = DEFAULT_MODEL_KEY
+    m = AVAILABLE_MODELS[model_key]
     chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=conv_id, system_message=system)\
-        .with_model("anthropic", "claude-sonnet-4-5-20250929")
+        .with_model(m["provider"], m["name"])
 
     async def gen():
-        yield f"data: {json.dumps({'type': 'conversation', 'conversation_id': conv_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'conversation', 'conversation_id': conv_id, 'model': model_key})}\n\n"
         buf = []
         try:
             async for ev in chat.stream_message(UserMessage(text=user_text)):
@@ -414,7 +427,8 @@ async def chat_stream(body: ChatMessageIn, user=Depends(get_current_user)):
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
         await db.chat_messages.insert_one({"msg_id": new_id("m"), "conversation_id": conv_id,
             "user_id": user["user_id"], "role": "assistant", "content": "".join(buf),
-            "dataset_id": body.dataset_id, "created_at": now_utc().isoformat()})
+            "dataset_id": body.dataset_id, "model": model_key,
+            "created_at": now_utc().isoformat()})
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -598,6 +612,12 @@ async def dataset_insights(dataset_id: str, user=Depends(get_current_user)):
         except Exception:
             items = [{"title": "AI Analysis", "insight": text[:300], "category": "opportunity", "impact": "medium"}]
     return {"dataset_id": dataset_id, "insights": items}
+
+
+@api.get("/models")
+async def list_models():
+    return {"models": [{"key": k, "label": v["label"], "provider": v["provider"]}
+                       for k, v in AVAILABLE_MODELS.items()], "default": DEFAULT_MODEL_KEY}
 
 
 @api.get("/")

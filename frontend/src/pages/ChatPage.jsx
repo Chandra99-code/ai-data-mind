@@ -22,9 +22,15 @@ export default function ChatPage() {
   const [datasets, setDatasets] = useState([]);
   const [datasetId, setDatasetId] = useState(sp.get("dataset") || "");
   const [convList, setConvList] = useState([]);
+  const [models, setModels] = useState([]);
+  const [modelKey, setModelKey] = useState("claude");
   const bottomRef = useRef(null);
 
-  useEffect(() => { api.get("/datasets").then(r => setDatasets(r.data)); refreshList(); }, []);
+  useEffect(() => {
+    api.get("/datasets").then(r => setDatasets(r.data));
+    api.get("/models").then(r => { setModels(r.data.models); setModelKey(r.data.default); });
+    refreshList();
+  }, []);
   useEffect(() => {
     if (params.id) {
       api.get(`/chat/${params.id}`).then(r => setMessages(r.data));
@@ -55,7 +61,7 @@ export default function ChatPage() {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         credentials: "include",
-        body: JSON.stringify({ message, dataset_id: datasetId || null, conversation_id: conv }),
+        body: JSON.stringify({ message, dataset_id: datasetId || null, conversation_id: conv, model: modelKey }),
       });
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -127,7 +133,10 @@ export default function ChatPage() {
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-indigo-400"/>
             <span className="text-sm">DataMind AI</span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 ml-1">Claude Sonnet 4.5</span>
+            <select value={modelKey} onChange={e=>setModelKey(e.target.value)} data-testid="chat-model-select"
+              className="ml-2 rounded-full bg-indigo-500/15 border border-indigo-500/25 text-indigo-200 text-[11px] font-mono px-2 py-1 focus:outline-none focus:border-indigo-400 transition-colors">
+              {models.map(m => <option key={m.key} value={m.key} className="bg-[#151619] text-neutral-200">{m.label}</option>)}
+            </select>
           </div>
           {datasetId && <div className="text-xs font-mono text-neutral-500 inline-flex items-center gap-1"><Database className="h-3 w-3"/> {datasets.find(d=>d.dataset_id===datasetId)?.name}</div>}
         </div>
