@@ -1,0 +1,47 @@
+{
+  "summary": "Tested Razorpay billing endpoints (/api/billing/*), plan gating on /api/ml/train, and the /app/billing + /app/settings UI. 11/12 backend tests pass (subscribe-pro returns 500 instead of graceful 502 — bug). Frontend billing page and header plan badge work end-to-end. Fixed two blocking missing-import bugs in SettingsPage.jsx (useEffect, CreditCard, Link) that were producing a white-screen 'Uncaught ReferenceError' and hiding the subscription-snapshot + manage-billing-link testids.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/billing/subscribe (plan_key=pro|business)", "issue": "Returns 500 'Internal Server Error' instead of a graceful 502 when Razorpay rejects auth. Root cause: create_subscription() awaits _ensure_razorpay_plan(plan_key) BEFORE its try/except block (server.py L1020). razorpay.errors.ServerError raised inside _ensure_razorpay_plan (rzp_client.plan.create at L966) is not wrapped and bubbles up as 500. Wrap the plan_id = await _ensure_razorpay_plan(...) line in the same try/except that already wraps subscription.create, or catch razorpay.errors.* inside _ensure_razorpay_plan and re-raise as HTTPException(502).", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/billing/webhook", "issue": "When signature is missing and RAZORPAY_WEBHOOK_SECRET is unset (dev mode), any external caller can inject arbitrary events into db.webhook_events and mutate subscriptions/user.plan. Consider requiring the secret in non-dev, or at minimum logging a WARN so this isn't accidentally deployed."},
+      {"endpoint": "startup", "issue": "FastAPI on_event('startup') deprecation warning persists — migrate to lifespan (carry-over from iter3)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SettingsPage.jsx", "issue": "FIXED by testing agent — missing imports: useEffect (React), CreditCard (lucide-react), Link (react-router-dom). Before the fix, /app/settings crashed with 'Uncaught ReferenceError: useEffect is not defined' and later 'CreditCard is not defined', hiding subscription-snapshot and manage-billing-link entirely.", "selector": "[data-testid=\"subscription-snapshot\"]", "priority": "HIGH"},
+      {"component": "BillingPage.jsx", "issue": "subscribe-pro click surfaces toast 'Failed to start checkout' — correct UX given the 500 from backend, but toast should ideally show the backend detail (Razorpay error message) so users know it's an auth/keys issue rather than a network glitch. Currently error?.response?.data?.detail is undefined for FastAPI 500s.", "selector": "[data-testid=\"subscribe-pro\"]", "priority": "MEDIUM"},
+      {"component": "BillingPage.jsx", "issue": "data-testid 'downgrade-free' only renders when user is NOT already on Free (button becomes 'Current plan' disabled instead). Spec asks for the testid on Free card; consider either (a) always rendering the testid on the free card's action button, or (b) documenting that downgrade-free only shows for paid users. Free amount card, ₹0/₹999/₹2499 amounts, and all other testids verified.", "selector": "[data-testid=\"downgrade-free\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_billing.py",
+    "/app/test_reports/pytest/iter4_billing.xml"
+  ],
+  "action_items": [
+    "server.py L1020-1032: wrap the _ensure_razorpay_plan() call inside the try/except in create_subscription() (or catch inside _ensure_razorpay_plan and raise HTTPException(502)) so plan.create failures surface as graceful 502 instead of 500.",
+    "Consider surfacing the backend detail message on frontend subscribe error toasts."
+  ],
+  "critical_code_review_comments": [
+    "server.py create_subscription: the try/except at L1021-1032 does not cover _ensure_razorpay_plan on L1020 which itself makes an unwrapped rzp_client.plan.create call → 500 leak. Same pattern would apply to any future paid-plan flow.",
+    "server.py razorpay_webhook: without a configured RAZORPAY_WEBHOOK_SECRET the endpoint accepts unsigned events and mutates user.plan / subscriptions. Fine for dev, but add a startup log warning and/or a feature flag to prevent accidental production deploy.",
+    "server.py L1082-1088: when verifying a subscription, plan is set on user directly but there is no downgrade path if verify is called on a stale/cancelled sub. Consider checking sub['status'] before flipping user.plan.",
+    "SettingsPage.jsx: two missing imports slipped past lint — recommend running `yarn eslint --max-warnings=0` in CI or enabling react-hooks/exhaustive-deps + no-undef for this project.",
+    "server.py is now 1260 lines — still growing; splitting billing into a router module would help maintenance."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_billing.py",
+    "/app/frontend/src/pages/SettingsPage.jsx"
+  ],
+  "success_rate": {"backend": "92% (11/12 billing tests)", "frontend": "95% — all testids present after SettingsPage fix; downgrade-free hidden by design when user is on Free"},
+  "test_credentials": "Fresh signup per run (ui_bill_* / test_billing_*@datamind.ai). Cleaned up on teardown.",
+  "seed_data_creation": "Webhook test inserts a fake subscription doc (sub_test_*) then deletes it. User plan reset to 'free' after ml_train gating test.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter4 focused on /api/billing/* + BillingPage + Settings subscription snapshot. Two frontend import bugs already fixed in SettingsPage.jsx by this run. Only remaining backend fix: wrap _ensure_razorpay_plan call in try/except so subscribe returns 502 not 500. Razorpay live keys in /app/backend/.env are unauthenticated with Razorpay (401 from their API) — do not attempt live subscription creation, only verify error handling.",
+  "rca of the issue": "500 on POST /api/billing/subscribe → RCA: create_subscription() calls _ensure_razorpay_plan(plan_key) OUTSIDE its try/except (server.py line 1020). Inside that helper, rzp_client.plan.create fails with razorpay.errors.ServerError because the RAZORPAY_KEY_ID/SECRET in .env are unauthenticated (Razorpay returns 401). The exception is not caught, so FastAPI serialises it as a plain 500 without a detail. Fix: move plan_id resolution inside the try or catch razorpay exceptions inside _ensure_razorpay_plan and re-raise HTTPException(502, f'Razorpay error: {e}'). Reproduction: signup a fresh user → POST /api/billing/subscribe {plan_key:'pro'} with Bearer token → backend log shows razorpay.errors.ServerError traceback, response is 500 'Internal Server Error'."
+}

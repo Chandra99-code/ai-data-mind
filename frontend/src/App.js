@@ -20,6 +20,7 @@ import MLPage from "@/pages/MLPage";
 import ReportsPage from "@/pages/ReportsPage";
 import ReportDetail from "@/pages/ReportDetail";
 import SettingsPage from "@/pages/SettingsPage";
+import BillingPage from "@/pages/BillingPage";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -56,6 +57,7 @@ function AppRouter() {
         <Route path="reports" element={<ReportsPage />} />
         <Route path="reports/:id" element={<ReportDetail />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="billing" element={<BillingPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound, Settings } from "lucide-react";
+import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound, Settings, CreditCard } from "lucide-react";
 import ChangePasswordDialog from "@/components/app/ChangePasswordDialog";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 
@@ -61,6 +61,9 @@ export default function DashboardLayout() {
               <DropdownMenuItem onClick={()=>nav_("/app/settings")} data-testid="menu-settings" className="cursor-pointer focus:bg-white/5">
                 <Settings className="h-4 w-4 mr-2" strokeWidth={1.5}/> Account settings
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={()=>nav_("/app/billing")} data-testid="menu-billing" className="cursor-pointer focus:bg-white/5">
+                <CreditCard className="h-4 w-4 mr-2" strokeWidth={1.5}/> Plan &amp; billing
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={()=>setCpOpen(true)} data-testid="menu-change-password" className="cursor-pointer focus:bg-white/5">
                 <KeyRound className="h-4 w-4 mr-2" strokeWidth={1.5}/> Change password
               </DropdownMenuItem>
@@ -81,6 +84,11 @@ export default function DashboardLayout() {
           <div className="flex items-center justify-between px-8 py-3">
             <div className="text-xs font-mono text-neutral-500">workspace / {user?.name?.toLowerCase().replace(/\s+/g,'-') || "personal"}</div>
             <div className="flex items-center gap-2">
+              {user?.plan && user.plan !== "free" ? (
+                <Link to="/app/billing" data-testid="plan-badge" className="text-[10px] font-mono px-2 py-1 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/25 uppercase tracking-widest hover:bg-indigo-500/20 transition-colors">{user.plan}</Link>
+              ) : (
+                <Link to="/app/billing" data-testid="plan-badge" className="text-[10px] font-mono px-2 py-1 rounded-full bg-white/[0.04] text-neutral-400 border border-white/10 uppercase tracking-widest hover:bg-white/[0.08] transition-colors">free · upgrade</Link>
+              )}
               <button className="p-2 rounded-md hover:bg-white/[0.05] transition-colors" data-testid="notifications-btn">
                 <Bell className="h-4 w-4 text-neutral-400" strokeWidth={1.5} />
               </button>

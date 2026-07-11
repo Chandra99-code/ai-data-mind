@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
-import { CheckCircle2, KeyRound, Link2, Link2Off, Mail, ShieldCheck, Loader2 } from "lucide-react";
+import { CheckCircle2, KeyRound, Link2, Link2Off, Mail, ShieldCheck, Loader2, CreditCard } from "lucide-react";
+import { Link } from "react-router-dom";
 import ChangePasswordDialog from "@/components/app/ChangePasswordDialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
@@ -54,6 +55,9 @@ export default function SettingsPage() {
   const [cpOpen, setCpOpen] = useState(false);
   const [spOpen, setSpOpen] = useState(false);
   const [unlinkLoading, setUnlinkLoading] = useState(false);
+  const [sub, setSub] = useState(null);
+
+  useEffect(() => { api.get("/billing/subscription").then(r => setSub(r.data)).catch(()=>{}); }, [user?.plan]);
 
   if (!user) return null;
 
@@ -114,6 +118,29 @@ export default function SettingsPage() {
               <GoogleIcon/> Google connected
             </span>
           )}
+        </div>
+      </section>
+
+      {/* Subscription snapshot */}
+      <section className="card-surface p-6" data-testid="subscription-snapshot">
+        <div className="flex items-center gap-2 mb-4">
+          <CreditCard className="h-4 w-4 text-indigo-300" strokeWidth={1.5}/>
+          <h2 className="font-display text-xl tracking-tight">Subscription</h2>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="flex items-baseline gap-2">
+              <span className="font-display text-2xl tracking-tight">{sub?.plan?.label || "Free"}</span>
+              <span className="font-mono text-sm text-neutral-500">₹{(sub?.plan?.amount_paise || 0) / 100}<span className="text-neutral-600">/mo</span></span>
+            </div>
+            {sub?.subscription?.status && (
+              <div className="mt-2 text-xs font-mono text-neutral-500">
+                Status: <span className="text-neutral-300">{sub.subscription.status}</span>
+                {sub.subscription.current_end && <span> · renews {new Date(sub.subscription.current_end * 1000).toLocaleDateString()}</span>}
+              </div>
+            )}
+          </div>
+          <Link to="/app/billing" className="btn-ghost text-xs px-3 py-1.5" data-testid="manage-billing-link">Manage billing</Link>
         </div>
       </section>
 

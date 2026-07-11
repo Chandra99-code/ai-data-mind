@@ -51,6 +51,20 @@ APP_URL = os.environ.get('APP_URL', '')
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
+# Razorpay
+import razorpay
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
+RAZORPAY_WEBHOOK_SECRET = os.environ.get('RAZORPAY_WEBHOOK_SECRET', '')
+rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET else None
+
+# Plan catalogue (INR paise). Razorpay plan_id will be created lazily & cached in db.billing_plans
+PLAN_CATALOG = {
+    "free":     {"key": "free",     "label": "Free",     "amount_paise": 0,      "currency": "INR", "features": ["3 datasets", "Auto EDA", "Basic chat"]},
+    "pro":      {"key": "pro",      "label": "Pro",      "amount_paise": 99900,  "currency": "INR", "features": ["Unlimited datasets", "ML + forecasting", "PDF reports", "Priority AI"]},
+    "business": {"key": "business", "label": "Business", "amount_paise": 249900, "currency": "INR", "features": ["Everything in Pro", "Workspaces", "SSO", "Audit logs"]},
+}
+
 # Brute-force protection
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
@@ -100,6 +114,11 @@ async def get_current_user(request: Request, session_token: Optional[str] = Cook
                 u = await db.users.find_one({"user_id": s["user_id"]}, {"_id": 0})
                 if u: return u
     raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+def _require_plan(user: dict, allowed: List[str]) -> None:
+    if (user.get("plan") or "free").lower() not in allowed:
+        raise HTTPException(402, f"Upgrade required. Feature available on: {', '.join(allowed)}")
 
 
 class SignupIn(BaseModel):
@@ -760,6 +779,7 @@ def _prep_ml_data(df, target, features):
 
 @api.post("/ml/train")
 async def ml_train(body: MLRequestIn, user=Depends(get_current_user)):
+    _require_plan(user, ["pro", "business"])
     df, doc = await _load_df_for(user["user_id"], body.dataset_id)
     task = body.task.lower()
 
@@ -910,6 +930,303 @@ async def list_models():
                        for k, v in AVAILABLE_MODELS.items()], "default": DEFAULT_MODEL_KEY}
 
 
+# ============================================================================
+# Billing / Subscriptions (Razorpay)
+# ============================================================================
+
+class SubscribeIn(BaseModel):
+    plan_key: str  # "pro" | "business"
+
+class VerifyIn(BaseModel):
+    razorpay_payment_id: str
+    razorpay_subscription_id: str
+    razorpay_signature: str
+
+class ChangePlanIn(BaseModel):
+    plan_key: str
+
+class CancelIn(BaseModel):
+    at_cycle_end: bool = True
+
+
+async def _rzp_call(fn, *args, **kwargs):
+    """Run sync Razorpay SDK call in a thread."""
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+async def _ensure_razorpay_plan(plan_key: str) -> str:
+    """Get or create a Razorpay plan_id for a plan_key. Returns plan_id."""
+    if not rzp_client: raise HTTPException(503, "Razorpay not configured")
+    cfg = PLAN_CATALOG.get(plan_key)
+    if not cfg or cfg["amount_paise"] == 0:
+        raise HTTPException(400, "Not a paid plan")
+    existing = await db.billing_plans.find_one({"plan_key": plan_key}, {"_id": 0})
+    if existing and existing.get("razorpay_plan_id"):
+        return existing["razorpay_plan_id"]
+    plan = await _rzp_call(rzp_client.plan.create, {
+        "period": "monthly", "interval": 1,
+        "item": {"name": f"DataMind AI {cfg['label']}", "amount": cfg["amount_paise"],
+                 "currency": cfg["currency"], "description": f"{cfg['label']} monthly subscription"},
+        "notes": {"plan_key": plan_key},
+    })
+    await db.billing_plans.update_one(
+        {"plan_key": plan_key},
+        {"$set": {"plan_key": plan_key, "razorpay_plan_id": plan["id"],
+                  "amount_paise": cfg["amount_paise"], "currency": cfg["currency"],
+                  "created_at": now_utc().isoformat()}},
+        upsert=True,
+    )
+    return plan["id"]
+
+
+def _plan_from_amount(amount_paise: int) -> str:
+    for k, v in PLAN_CATALOG.items():
+        if v["amount_paise"] == amount_paise:
+            return k
+    return "free"
+
+
+@api.get("/billing/plans")
+async def billing_plans():
+    return {
+        "plans": [{"key": k, "label": v["label"], "amount": v["amount_paise"] / 100,
+                   "amount_paise": v["amount_paise"], "currency": v["currency"],
+                   "features": v["features"]} for k, v in PLAN_CATALOG.items()],
+        "razorpay_key_id": RAZORPAY_KEY_ID,
+        "configured": bool(rzp_client),
+    }
+
+
+@api.get("/billing/subscription")
+async def get_subscription(user=Depends(get_current_user)):
+    sub = await db.subscriptions.find_one(
+        {"user_id": user["user_id"]}, {"_id": 0}, sort=[("created_at", -1)]
+    )
+    plan_key = (user.get("plan") or "free").lower()
+    return {
+        "plan_key": plan_key,
+        "plan": PLAN_CATALOG.get(plan_key, PLAN_CATALOG["free"]),
+        "subscription": sub,
+    }
+
+
+@api.post("/billing/subscribe")
+async def create_subscription(body: SubscribeIn, user=Depends(get_current_user)):
+    if not rzp_client:
+        raise HTTPException(503, "Razorpay not configured on the server")
+    plan_key = body.plan_key.lower()
+    if plan_key not in PLAN_CATALOG or plan_key == "free":
+        raise HTTPException(400, "Invalid paid plan")
+    plan_id = await _ensure_razorpay_plan(plan_key)
+    try:
+        sub = await _rzp_call(rzp_client.subscription.create, {
+            "plan_id": plan_id,
+            "customer_notify": 1,
+            "total_count": 120,  # 10 years worth of monthly cycles
+            "quantity": 1,
+            "notes": {"user_id": user["user_id"], "plan_key": plan_key,
+                      "email": user.get("email", "")},
+        })
+    except Exception as e:
+        logger.exception("razorpay subscription.create")
+        raise HTTPException(502, f"Razorpay error: {e}")
+    await db.subscriptions.insert_one({
+        "subscription_id": sub["id"], "user_id": user["user_id"],
+        "plan_key": plan_key, "razorpay_plan_id": plan_id,
+        "status": sub.get("status", "created"),
+        "short_url": sub.get("short_url"), "amount_paise": PLAN_CATALOG[plan_key]["amount_paise"],
+        "currency": PLAN_CATALOG[plan_key]["currency"],
+        "created_at": now_utc().isoformat(), "raw": sub,
+    })
+    return {
+        "subscription_id": sub["id"],
+        "razorpay_key_id": RAZORPAY_KEY_ID,
+        "plan_key": plan_key,
+        "amount_paise": PLAN_CATALOG[plan_key]["amount_paise"],
+        "currency": PLAN_CATALOG[plan_key]["currency"],
+        "short_url": sub.get("short_url"),
+    }
+
+
+@api.post("/billing/verify")
+async def verify_subscription(body: VerifyIn, user=Depends(get_current_user)):
+    if not rzp_client:
+        raise HTTPException(503, "Razorpay not configured")
+    payload = f"{body.razorpay_payment_id}|{body.razorpay_subscription_id}"
+    try:
+        rzp_client.utility.verify_subscription_payment_signature({
+            "razorpay_payment_id": body.razorpay_payment_id,
+            "razorpay_subscription_id": body.razorpay_subscription_id,
+            "razorpay_signature": body.razorpay_signature,
+        })
+    except Exception:
+        raise HTTPException(400, "Invalid payment signature")
+
+    sub = await db.subscriptions.find_one({"subscription_id": body.razorpay_subscription_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not sub: raise HTTPException(404, "Subscription not found")
+    # Fetch latest details
+    try:
+        latest = await _rzp_call(rzp_client.subscription.fetch, body.razorpay_subscription_id)
+    except Exception:
+        latest = {}
+    await db.subscriptions.update_one(
+        {"subscription_id": body.razorpay_subscription_id},
+        {"$set": {"status": latest.get("status", "authenticated"),
+                  "current_start": latest.get("current_start"),
+                  "current_end": latest.get("current_end"),
+                  "verified_at": now_utc().isoformat(),
+                  "last_payment_id": body.razorpay_payment_id,
+                  "raw": latest or sub.get("raw", {})}},
+    )
+    # Activate plan on user
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"plan": sub["plan_key"]}})
+    await db.notifications.insert_one({
+        "notif_id": new_id("n"), "user_id": user["user_id"], "type": "billing",
+        "title": f"Subscribed to {PLAN_CATALOG[sub['plan_key']]['label']}",
+        "body": f"Your {sub['plan_key']} plan is active.", "read": False,
+        "created_at": now_utc().isoformat(),
+    })
+    return {"ok": True, "plan_key": sub["plan_key"]}
+
+
+@api.post("/billing/cancel")
+async def cancel_subscription(body: CancelIn, user=Depends(get_current_user)):
+    if not rzp_client: raise HTTPException(503, "Razorpay not configured")
+    sub = await db.subscriptions.find_one(
+        {"user_id": user["user_id"], "status": {"$in": ["active", "authenticated", "pending"]}},
+        {"_id": 0}, sort=[("created_at", -1)],
+    )
+    if not sub:
+        raise HTTPException(404, "No active subscription")
+    try:
+        res = await _rzp_call(rzp_client.subscription.cancel, sub["subscription_id"],
+                              {"cancel_at_cycle_end": 1 if body.at_cycle_end else 0})
+    except Exception as e:
+        raise HTTPException(502, f"Cancel failed: {e}")
+    await db.subscriptions.update_one(
+        {"subscription_id": sub["subscription_id"]},
+        {"$set": {"status": res.get("status", "cancelled"),
+                  "cancelled_at": now_utc().isoformat(),
+                  "cancel_at_cycle_end": bool(body.at_cycle_end)}},
+    )
+    if not body.at_cycle_end:
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"plan": "free"}})
+    return {"ok": True, "status": res.get("status")}
+
+
+@api.post("/billing/change-plan")
+async def change_plan(body: ChangePlanIn, user=Depends(get_current_user)):
+    """Simple upgrade/downgrade: cancel current subscription immediately, subscribe to new plan."""
+    if not rzp_client: raise HTTPException(503, "Razorpay not configured")
+    new_key = body.plan_key.lower()
+    if new_key not in PLAN_CATALOG:
+        raise HTTPException(400, "Invalid plan")
+    current = await db.subscriptions.find_one(
+        {"user_id": user["user_id"], "status": {"$in": ["active", "authenticated", "pending"]}},
+        {"_id": 0}, sort=[("created_at", -1)],
+    )
+    if current and current.get("plan_key") == new_key:
+        raise HTTPException(400, "Already on this plan")
+    if current:
+        try:
+            await _rzp_call(rzp_client.subscription.cancel, current["subscription_id"], {"cancel_at_cycle_end": 0})
+            await db.subscriptions.update_one(
+                {"subscription_id": current["subscription_id"]},
+                {"$set": {"status": "cancelled", "cancelled_at": now_utc().isoformat(),
+                          "cancelled_reason": "plan_change"}},
+            )
+        except Exception as e:
+            logger.warning("cancel-before-change failed: %s", e)
+    if new_key == "free":
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"plan": "free"}})
+        return {"ok": True, "plan_key": "free", "next": "downgraded"}
+    return await create_subscription(SubscribeIn(plan_key=new_key), user=user)
+
+
+@api.get("/billing/invoices")
+async def billing_invoices(user=Depends(get_current_user)):
+    """Return invoice-like billing history from stored subscriptions + Razorpay invoices for active ones."""
+    subs = await db.subscriptions.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    items = []
+    for s in subs:
+        row = {
+            "subscription_id": s["subscription_id"],
+            "plan_key": s.get("plan_key"),
+            "plan_label": PLAN_CATALOG.get(s.get("plan_key", ""), {}).get("label", s.get("plan_key")),
+            "status": s.get("status"),
+            "amount": (s.get("amount_paise") or 0) / 100,
+            "currency": s.get("currency", "INR"),
+            "created_at": s.get("created_at"),
+            "current_end": s.get("current_end"),
+            "invoices": [],
+        }
+        if rzp_client and s.get("status") in {"active", "authenticated", "completed", "halted"}:
+            try:
+                inv = await _rzp_call(rzp_client.invoice.all, {"subscription_id": s["subscription_id"]})
+                for i in inv.get("items", [])[:20]:
+                    row["invoices"].append({
+                        "invoice_id": i.get("id"),
+                        "amount": (i.get("amount") or 0) / 100,
+                        "currency": i.get("currency", "INR"),
+                        "status": i.get("status"),
+                        "paid_at": i.get("paid_at"),
+                        "short_url": i.get("short_url"),
+                        "invoice_number": i.get("invoice_number"),
+                    })
+            except Exception as e:
+                logger.debug("invoices fetch failed: %s", e)
+        items.append(row)
+    return {"items": items}
+
+
+@api.post("/billing/webhook")
+async def razorpay_webhook(request: Request):
+    payload = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    if RAZORPAY_WEBHOOK_SECRET and rzp_client:
+        try:
+            rzp_client.utility.verify_webhook_signature(payload.decode(), signature, RAZORPAY_WEBHOOK_SECRET)
+        except Exception:
+            raise HTTPException(400, "Invalid webhook signature")
+    try:
+        data = json.loads(payload.decode())
+    except Exception:
+        raise HTTPException(400, "Invalid payload")
+
+    event = data.get("event", "")
+    entity = data.get("payload", {}).get("subscription", {}).get("entity") or \
+             data.get("payload", {}).get("payment", {}).get("entity") or {}
+    sub_id = entity.get("subscription_id") or entity.get("id") if event.startswith("subscription.") else entity.get("subscription_id")
+
+    if event.startswith("subscription.") and entity.get("id"):
+        # subscription entity
+        s = entity
+        await db.subscriptions.update_one(
+            {"subscription_id": s["id"]},
+            {"$set": {"status": s.get("status"),
+                      "current_start": s.get("current_start"),
+                      "current_end": s.get("current_end"),
+                      "webhook_last_event": event,
+                      "webhook_at": now_utc().isoformat(),
+                      "raw": s}},
+        )
+        stored = await db.subscriptions.find_one({"subscription_id": s["id"]}, {"_id": 0})
+        if stored:
+            uid = stored["user_id"]; pk = stored.get("plan_key", "free")
+            if event == "subscription.activated":
+                await db.users.update_one({"user_id": uid}, {"$set": {"plan": pk}})
+            elif event in ("subscription.cancelled", "subscription.completed", "subscription.paused", "subscription.halted"):
+                await db.users.update_one({"user_id": uid}, {"$set": {"plan": "free"}})
+    elif event.startswith("payment.") and sub_id:
+        await db.subscriptions.update_one(
+            {"subscription_id": sub_id},
+            {"$push": {"payment_events": {"event": event, "payment_id": entity.get("id"),
+                                          "amount": entity.get("amount"), "at": now_utc().isoformat()}}},
+        )
+    await db.webhook_events.insert_one({"event": event, "at": now_utc().isoformat(), "payload": data})
+    return {"received": True}
+
+
 @api.get("/")
 async def root(): return {"service": "DataMind AI", "status": "ok", "time": now_utc().isoformat()}
 
@@ -932,6 +1249,9 @@ async def ensure_indexes():
     await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
     await db.email_tokens.create_index("token", unique=True)
     await db.email_tokens.create_index("email")
+    await db.subscriptions.create_index("subscription_id", unique=True)
+    await db.subscriptions.create_index("user_id")
+    await db.billing_plans.create_index("plan_key", unique=True)
     logger.info("DataMind AI backend ready")
 
 
