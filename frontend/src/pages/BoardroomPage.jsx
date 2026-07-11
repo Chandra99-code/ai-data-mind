@@ -57,7 +57,7 @@ export default function BoardroomPage() {
         </div>
         {data && (
           <div className="flex gap-2">
-            <button onClick={downloadPdf} disabled={exporting} data-testid="board-export-pdf" className="btn-primary inline-flex items-center gap-2">
+            <button onClick={downloadPdf} disabled={exporting || !data} data-testid="board-export-pdf" className="btn-primary inline-flex items-center gap-2">
               {exporting ? <Loader2 className="h-4 w-4 animate-spin"/> : <Download className="h-4 w-4"/>} Export PDF
             </button>
             <button disabled title="Coming soon" data-testid="board-export-pptx"
@@ -66,6 +66,19 @@ export default function BoardroomPage() {
             </button>
             <button disabled title="Coming soon" data-testid="board-export-word"
               className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
+              <FileText className="h-4 w-4"/> Word · soon
+            </button>
+          </div>
+        )}
+        {!data && (
+          <div className="flex gap-2">
+            <button disabled data-testid="board-export-pdf" className="btn-primary inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
+              <Download className="h-4 w-4"/> Export PDF
+            </button>
+            <button disabled title="Coming soon" data-testid="board-export-pptx" className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
+              <FileType2 className="h-4 w-4"/> PowerPoint · soon
+            </button>
+            <button disabled title="Coming soon" data-testid="board-export-word" className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
               <FileText className="h-4 w-4"/> Word · soon
             </button>
           </div>
