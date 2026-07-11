@@ -20,6 +20,7 @@ import WhatIfPage from "@/pages/WhatIfPage";
 import BoardroomPage from "@/pages/BoardroomPage";
 import AutomationsPage from "@/pages/AutomationsPage";
 import IntegrationsPage from "@/pages/IntegrationsPage";
+import CollaborationPage from "@/pages/CollaborationPage";
 import DatasetsPage from "@/pages/DatasetsPage";
 import DatasetDetail from "@/pages/DatasetDetail";
 import ChatPage from "@/pages/ChatPage";
@@ -63,6 +64,7 @@ function AppRouter() {
         <Route path="boardroom" element={<BoardroomPage />} />
         <Route path="automations" element={<AutomationsPage />} />
         <Route path="integrations" element={<IntegrationsPage />} />
+        <Route path="team" element={<CollaborationPage />} />
         <Route path="datasets" element={<DatasetsPage />} />
         <Route path="datasets/:id" element={<DatasetDetail />} />
         <Route path="chat" element={<ChatPage />} />

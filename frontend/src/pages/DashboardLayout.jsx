@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound, Settings, CreditCard, Search, GitBranch, Plug, Zap } from "lucide-react";
+import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound, Settings, CreditCard, Search, GitBranch, Plug, Zap, Users } from "lucide-react";
 import ChangePasswordDialog from "@/components/app/ChangePasswordDialog";
 import FloatingAssistant from "@/components/app/FloatingAssistant";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
@@ -18,6 +18,7 @@ const nav = [
   { to: "/app/reports", icon: FileBarChart2, label: "Reports", testid: "nav-reports" },
   { to: "/app/automations", icon: Zap, label: "Automations", testid: "nav-automations" },
   { to: "/app/integrations", icon: Plug, label: "Integrations", testid: "nav-integrations" },
+  { to: "/app/team", icon: Users, label: "Team", testid: "nav-team" },
 ];
 
 export default function DashboardLayout() {

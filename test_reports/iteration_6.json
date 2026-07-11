@@ -1,0 +1,25 @@
+{
+  "summary": "Iter6 verified Team Collaboration + Comments + Boardroom Office exports + Databricks connector + Boardroom Operations/action_plan. Backend: 12/12 pytest pass (auto personal workspace idempotent, create named ws, pending & active invites + duplicate 400 + invalid-role 400, viewer cannot invite 403, owner-demote 400 + viewer→admin promotion, owner-remove 400 + member remove, comments with @mention + notification for mentioned user + non-author delete 403 + author delete, docx/pptx export Content-Type + non-empty body, invalid format 400, integrations includes databricks:warehouse:coming_soon, /api/copilot/boardroom returns sections + action_plan). Frontend: signup → sidebar has nav-team; /app/team shows auto personal workspace with '· you' and Owner pill; New workspace flow (new-workspace-btn → ws-name-input → ws-create-submit) adds a second ws-tab; Invite flow from non-personal workspace (invite-member-btn → invite-email-input + invite-role-select=viewer → invite-submit) shows the unregistered invitee row with status 'pending'; /app/boardroom renders all three export buttons (board-export-pdf, board-export-pptx, board-export-word) in their disabled placeholder state before a briefing.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_collab_export.py",
+    "/app/test_reports/pytest/iter6.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1815 lines — collaboration (workspaces + comments, ~170 lines) and boardroom docx/pptx builders (~140 lines) are natural extractions into routers/collaboration.py and services/boardroom_export.py. Repeat of the split recommendation from iter4/iter5.",
+    "add_member sends a real email (send_email) with no queue/backoff — a bad SMTP config or Resend outage will slow the invite POST synchronously (up to socket timeout). Consider fire-and-forget via BackgroundTasks.",
+    "_extract_mentions uses \"import re\" inside the function on every call — hoist to module level.",
+    "GET /api/comments has no workspace/entity ACL — any authenticated user who knows an entity_id can read the thread. If comments are meant to be workspace-scoped, add a permission check (or explicitly document it as intentional for the shared-boardroom UX).",
+    "BoardroomPage constructs entityId as `${datasetId}::latest` — the string 'latest' means comments follow the dataset, not a specific briefing run. Fine for MVP but worth flagging."
+  ],
+  "updated_files": ["/app/backend/tests/test_collab_export.py", "/app/test_reports/iteration_6.json"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100% (all specified testids verified — nav-team, ws-tab-*, new-workspace-btn, ws-name-input, ws-create-submit, invite-member-btn, invite-email-input, invite-role-select, invite-submit, board-export-pdf/pptx/word)"},
+  "test_credentials": "Fresh signup per run — iter6a_*/iter6b_*@datamind.ai (backend), uitest_*@datamind.ai (frontend). Preseed demo@datamind.ai / Demo1234! available.",
+  "seed_data_creation": "Two users A/B per backend run + one pending invite email (never registered). One named workspace 'TEST_team'. One 20-row CSV for /copilot/boardroom LLM shape test. Frontend run creates one uitest user + one 'TEST_ws_*' workspace + one pending invite.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 15 spec bullets in iter6 pass. Backend suite at /app/backend/tests/test_collab_export.py covers workspaces (auto/create/invite/role/remove/permissions), comments (mentions + notifications + author-only delete), boardroom docx/pptx export headers + non-empty body + invalid format, integrations databricks entry, and LLM boardroom shape (sections + action_plan). Frontend Playwright covered up to /app/boardroom placeholder state; a full LLM briefing → comments-panel + docx/pptx download blob was not automated (backend already covers the export endpoint end-to-end); if next iteration needs UI comment posting, upload a dataset via /api/datasets/upload then trigger board-run in the UI and use CommentsPanel testids (comments-panel, comment-input, comment-submit, comment-{cid}).",
+  "rca of the issue": "N/A — no bugs found."
+}

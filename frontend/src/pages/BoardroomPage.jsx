@@ -1,14 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, API_URL } from "@/lib/api";
 import { Sparkles, Loader2, Download, FileText, FileSpreadsheet, FileType2 } from "lucide-react";
 import html2pdf from "html2pdf.js";
 import { toast } from "sonner";
+import CommentsPanel from "@/components/app/CommentsPanel";
 
 const ROLE_COLOR = {
   CEO: "text-indigo-300 bg-indigo-500/10 border-indigo-500/25",
   CFO: "text-emerald-300 bg-emerald-500/10 border-emerald-500/25",
   Marketing: "text-pink-300 bg-pink-500/10 border-pink-500/25",
   Sales: "text-amber-300 bg-amber-500/10 border-amber-500/25",
+  Operations: "text-teal-300 bg-teal-500/10 border-teal-500/25",
   Risk: "text-red-300 bg-red-500/10 border-red-500/25",
   Forecast: "text-cyan-300 bg-cyan-500/10 border-cyan-500/25",
 };
@@ -47,6 +49,30 @@ export default function BoardroomPage() {
     } finally { setExporting(false); }
   };
 
+  const downloadOffice = async (format) => {
+    if (!data) return;
+    setExporting(true);
+    try {
+      const token = localStorage.getItem("datamind_token");
+      const res = await fetch(`${API_URL}/copilot/boardroom/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        credentials: "include",
+        body: JSON.stringify({ format, data }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(data.title || "Boardroom").replace(/\s+/g,'_')}.${format}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(`Export failed: ${err.message}`);
+    } finally { setExporting(false); }
+  };
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -60,13 +86,13 @@ export default function BoardroomPage() {
             <button onClick={downloadPdf} disabled={exporting || !data} data-testid="board-export-pdf" className="btn-primary inline-flex items-center gap-2">
               {exporting ? <Loader2 className="h-4 w-4 animate-spin"/> : <Download className="h-4 w-4"/>} Export PDF
             </button>
-            <button disabled title="Coming soon" data-testid="board-export-pptx"
-              className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
-              <FileType2 className="h-4 w-4"/> PowerPoint · soon
+            <button onClick={()=>downloadOffice("pptx")} disabled={exporting} data-testid="board-export-pptx"
+              className="btn-ghost inline-flex items-center gap-2">
+              <FileType2 className="h-4 w-4"/> PowerPoint
             </button>
-            <button disabled title="Coming soon" data-testid="board-export-word"
-              className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
-              <FileText className="h-4 w-4"/> Word · soon
+            <button onClick={()=>downloadOffice("docx")} disabled={exporting} data-testid="board-export-word"
+              className="btn-ghost inline-flex items-center gap-2">
+              <FileText className="h-4 w-4"/> Word
             </button>
           </div>
         )}
@@ -75,11 +101,11 @@ export default function BoardroomPage() {
             <button disabled data-testid="board-export-pdf" className="btn-primary inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
               <Download className="h-4 w-4"/> Export PDF
             </button>
-            <button disabled title="Coming soon" data-testid="board-export-pptx" className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
-              <FileType2 className="h-4 w-4"/> PowerPoint · soon
+            <button disabled data-testid="board-export-pptx" className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
+              <FileType2 className="h-4 w-4"/> PowerPoint
             </button>
-            <button disabled title="Coming soon" data-testid="board-export-word" className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
-              <FileText className="h-4 w-4"/> Word · soon
+            <button disabled data-testid="board-export-word" className="btn-ghost inline-flex items-center gap-2 opacity-50 cursor-not-allowed">
+              <FileText className="h-4 w-4"/> Word
             </button>
           </div>
         )}
@@ -120,20 +146,30 @@ export default function BoardroomPage() {
               </ul>
             </section>
           ))}
-          {(data.actions || []).length > 0 && (
+          {((data.action_plan || data.actions) || []).length > 0 && (
             <section>
-              <div className="label-eyebrow mb-3">recommended actions</div>
+              <div className="label-eyebrow mb-3">action plan</div>
               <div className="rounded-lg border border-white/[0.08] overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-white/[0.03] text-xs font-mono uppercase tracking-wider text-neutral-500">
-                    <tr><th className="text-left px-4 py-2">Owner</th><th className="text-left px-4 py-2">Action</th><th className="text-left px-4 py-2">Due</th></tr>
+                    <tr>
+                      <th className="text-left px-4 py-2">Owner</th>
+                      <th className="text-left px-4 py-2">Action</th>
+                      <th className="text-left px-4 py-2">Due</th>
+                      <th className="text-left px-4 py-2">Priority</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {data.actions.map((a) => (
+                    {(data.action_plan || data.actions).map((a) => (
                       <tr key={a.action} className="border-t border-white/[0.06]">
                         <td className="px-4 py-2">{a.owner}</td>
                         <td className="px-4 py-2">{a.action}</td>
                         <td className="px-4 py-2 font-mono text-xs text-neutral-500">{a.due}</td>
+                        <td className="px-4 py-2">
+                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${a.priority === "P0" ? "text-red-300 bg-red-500/10 border-red-500/25" : a.priority === "P1" ? "text-amber-300 bg-amber-500/10 border-amber-500/25" : "text-neutral-400 bg-white/5 border-white/10"}`}>
+                            {a.priority || "P2"}
+                          </span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -142,6 +178,10 @@ export default function BoardroomPage() {
             </section>
           )}
         </div>
+      )}
+
+      {data && datasetId && (
+        <CommentsPanel entityType="boardroom" entityId={`${datasetId}::latest`} title="Boardroom discussion"/>
       )}
     </div>
   );
