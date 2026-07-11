@@ -19,7 +19,12 @@ export default function ReportDetail() {
     api.get(`/reports/${id}`).then(async r => {
       setReport(r.data);
       if (r.data?.dataset_id) {
-        try { const ds = await api.get(`/datasets/${r.data.dataset_id}`); setDataset(ds.data); } catch {}
+        try {
+          const ds = await api.get(`/datasets/${r.data.dataset_id}`);
+          setDataset(ds.data);
+        } catch (err) {
+          console.warn("dataset for report unavailable:", err?.message);
+        }
       }
     });
   }, [id]);
@@ -102,8 +107,8 @@ export default function ReportDetail() {
           <section>
             <h2 className="font-display text-2xl tracking-tight mb-4">AI-generated Insights</h2>
             <div className="grid md:grid-cols-2 gap-4">
-              {insights.map((it, i) => (
-                <div key={i} className="rounded-lg border border-white/[0.08] p-5">
+              {insights.map((it) => (
+                <div key={`${it.category}-${it.title}`} className="rounded-lg border border-white/[0.08] p-5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-mono uppercase tracking-widest text-indigo-300">{it.category}</span>
                     <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${it.impact === "high" ? "bg-red-500/15 text-red-300" : it.impact === "medium" ? "bg-amber-500/15 text-amber-300" : "bg-emerald-500/15 text-emerald-300"}`}>{it.impact}</span>

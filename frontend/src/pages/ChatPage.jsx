@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, API_URL } from "@/lib/api";
 import { renderMarkdown } from "@/lib/markdown";
+import DOMPurify from "dompurify";
 import { Send, Loader2, MessageSquare, Database } from "lucide-react";
 
 const SUGGESTIONS = [
@@ -25,23 +26,26 @@ export default function ChatPage() {
   const [models, setModels] = useState([]);
   const [modelKey, setModelKey] = useState("claude");
   const bottomRef = useRef(null);
+  const idBase = useRef(0);
+  const nextId = () => (++idBase.current);
+  const [msgIds, setMsgIds] = useState([]);
+
+  const refreshList = useCallback(() => api.get("/chat/conversations").then(r => setConvList(r.data)), []);
 
   useEffect(() => {
     api.get("/datasets").then(r => setDatasets(r.data));
     api.get("/models").then(r => { setModels(r.data.models); setModelKey(r.data.default); });
     refreshList();
-  }, []);
+  }, [refreshList]);
   useEffect(() => {
     if (params.id) {
-      api.get(`/chat/${params.id}`).then(r => setMessages(r.data));
+      api.get(`/chat/${params.id}`).then(r => { setMessages(r.data); setMsgIds(r.data.map(() => nextId())); });
       setConv(params.id);
     } else {
-      setMessages([]); setConv(null);
+      setMessages([]); setMsgIds([]); setConv(null);
     }
   }, [params.id]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, streaming]);
-
-  const refreshList = () => api.get("/chat/conversations").then(r => setConvList(r.data));
 
   const send = async (msg) => {
     const message = (msg ?? text).trim();
@@ -49,6 +53,7 @@ export default function ChatPage() {
     setText("");
     const localMsgs = [...messages, { role: "user", content: message }];
     setMessages(localMsgs);
+    setMsgIds(prev => [...prev, nextId(), nextId()]);
     setStreaming(true);
     setMessages(prev => [...prev, { role: "assistant", content: "" }]);
 
@@ -154,17 +159,19 @@ export default function ChatPage() {
               </div>
             </div>
           )}
-          {messages.map((m, i) => (
-            <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
+          {messages.map((m, i) => {
+            const key = msgIds[i] ?? `msg-${i}`;
+            return (
+            <div key={key} className={m.role === "user" ? "flex justify-end" : ""}>
               <div className={`max-w-3xl ${m.role === "user" ? "bg-indigo-500/15 border border-indigo-500/25" : "bg-[#0E0F12] border border-white/[0.06]"} rounded-xl px-4 py-3`}>
                 {m.role === "user" ? (
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">{m.content}</p>
                 ) : (
-                  <div className="md-content text-sm text-neutral-200" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content || (streaming && i === messages.length - 1 ? "▋" : "")) }}/>
+                  <div className="md-content text-sm text-neutral-200" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(m.content || (streaming && i === messages.length - 1 ? "▋" : ""))) }}/>
                 )}
               </div>
             </div>
-          ))}
+          );})}
           <div ref={bottomRef}/>
         </div>
 

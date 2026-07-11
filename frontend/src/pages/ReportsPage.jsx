@@ -20,7 +20,11 @@ export default function ReportsPage() {
     try {
       const eda = await api.get(`/datasets/${datasetId}/eda`).then(r => r.data);
       let insights = [];
-      try { insights = (await api.get(`/datasets/${datasetId}/insights`).then(r => r.data)).insights; } catch {}
+      try {
+        insights = (await api.get(`/datasets/${datasetId}/insights`).then(r => r.data)).insights;
+      } catch (err) {
+        console.warn("insights unavailable for report:", err?.message);
+      }
       const sections = [
         { type: "summary", data: { rows: eda.rows, cols: eda.cols, missing: Object.values(eda.missing).reduce((a,b)=>a+b,0), duplicates: eda.duplicates } },
         { type: "insights", data: { insights } },
@@ -31,7 +35,10 @@ export default function ReportsPage() {
       toast.success("Report generated");
       setTitle(""); setDatasetId("");
       load();
-    } catch (e) { toast.error("Report generation failed"); }
+    } catch (e) {
+      console.warn("report create failed:", e?.message);
+      toast.error("Report generation failed");
+    }
     finally { setCreating(false); }
   };
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { CHART_COLORS } from "@/lib/colors";
@@ -41,9 +41,17 @@ export default function DatasetDetail() {
       const { data } = await api.post("/clean", { dataset_id: id, drop_duplicates: true, fill_numeric: "median", fill_categorical: "mode", drop_empty_cols: true, remove_outliers: false });
       setCleanResult(data);
       toast.success("Dataset cleaned");
-    } catch { toast.error("Cleaning failed"); }
+    } catch (err) {
+      console.warn("clean failed:", err?.message);
+      toast.error("Cleaning failed");
+    }
     finally { setCleaning(false); }
   };
+
+  const totalMissing = useMemo(
+    () => edaData ? Object.values(edaData.missing).reduce((a, b) => a + b, 0).toLocaleString() : "0",
+    [edaData]
+  );
 
   if (!ds || !edaData) return <div className="text-sm text-neutral-500">Loading dataset…</div>;
 
@@ -102,8 +110,8 @@ export default function DatasetDetail() {
         <div className="card-surface p-6">
           <h2 className="font-display text-xl mb-4 flex items-center gap-2"><Sparkles className="h-5 w-5 text-indigo-400"/> AI-generated insights</h2>
           <div className="grid md:grid-cols-2 gap-4">
-            {insights.map((it, i) => (
-              <div key={i} className="rounded-md border border-white/[0.06] p-4 bg-[#0E0F12]" data-testid={`insight-${i}`}>
+            {insights.map((it) => (
+              <div key={`${it.category}-${it.title}`} className="rounded-md border border-white/[0.06] p-4 bg-[#0E0F12]" data-testid={`insight-${it.category}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-mono uppercase tracking-widest text-indigo-300">{it.category}</span>
                   <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${it.impact === "high" ? "bg-red-500/15 text-red-300" : it.impact === "medium" ? "bg-amber-500/15 text-amber-300" : "bg-emerald-500/15 text-emerald-300"}`}>{it.impact}</span>
@@ -126,7 +134,7 @@ export default function DatasetDetail() {
             </thead>
             <tbody>
               {(ds.preview || []).slice(0,20).map((row, i) => (
-                <tr key={i} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
+                <tr key={`row-${i}-${JSON.stringify(row).slice(0,30)}`} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
                   {Object.keys(ds.preview[0] || {}).map(c => <td key={c} className="px-3 py-2 text-neutral-300 whitespace-nowrap max-w-[200px] truncate">{String(row[c] ?? "—")}</td>)}
                 </tr>
               ))}
@@ -237,7 +245,7 @@ function CorrHeatmap({ corr }) {
           <React.Fragment key={row}>
             <div className="text-[11px] font-mono text-neutral-400 pr-3 py-1 truncate">{row}</div>
             {matrix[i].map((v, j) => (
-              <div key={j} className="h-8 rounded border border-white/[0.04] flex items-center justify-center text-[10px] font-mono" style={{ background: cellFor(v), color: Math.abs(v) > 0.4 ? "#fff" : "#8F8F91" }}>
+              <div key={`${row}-${columns[j]}`} className="h-8 rounded border border-white/[0.04] flex items-center justify-center text-[10px] font-mono" style={{ background: cellFor(v), color: Math.abs(v) > 0.4 ? "#fff" : "#8F8F91" }}>
                 {Number(v || 0).toFixed(2)}
               </div>
             ))}

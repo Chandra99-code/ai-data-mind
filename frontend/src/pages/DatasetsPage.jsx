@@ -9,8 +9,8 @@ export default function DatasetsPage() {
   const [datasets, setDatasets] = useState([]);
   const [uploading, setUploading] = useState(false);
 
-  const load = () => api.get("/datasets").then(r => setDatasets(r.data));
-  useEffect(() => { load(); }, []);
+  const load = useCallback(() => api.get("/datasets").then(r => setDatasets(r.data)), []);
+  useEffect(() => { load(); }, [load]);
 
   const onDrop = useCallback(async (files) => {
     if (!files?.length) return;
@@ -24,7 +24,7 @@ export default function DatasetsPage() {
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Upload failed");
     } finally { setUploading(false); }
-  }, []);
+  }, [load]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop, multiple: false,

@@ -135,12 +135,12 @@ export default function MLPage() {
               <h2 className="font-display text-xl mb-4">Confusion matrix</h2>
               <div className="inline-block">
                 {result.confusion_matrix.map((row, i) => (
-                  <div key={i} className="flex">
+                  <div key={`ci-${i}`} className="flex">
                     {row.map((v, j) => {
                       const max = Math.max(...result.confusion_matrix.flat());
                       const intensity = max > 0 ? v / max : 0;
                       return (
-                        <div key={j} className="h-12 w-16 border border-white/[0.04] flex items-center justify-center font-mono text-sm"
+                        <div key={`cm-${i}-${j}`} className="h-12 w-16 border border-white/[0.04] flex items-center justify-center font-mono text-sm"
                           style={{ background: `rgba(99,102,241,${intensity * 0.9})`, color: intensity > 0.4 ? "#fff" : "#8F8F91" }}>{v}</div>
                       );
                     })}
@@ -157,7 +157,7 @@ export default function MLPage() {
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
                   <Pie data={Object.entries(result.cluster_sizes).map(([k,v])=>({name:`Cluster ${k}`, value:v}))} dataKey="value" outerRadius={110} innerRadius={60}>
-                    {Object.keys(result.cluster_sizes).map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]}/>)}
+                    {Object.keys(result.cluster_sizes).map((label, i) => <Cell key={`cluster-${label}`} fill={CHART_COLORS[i % CHART_COLORS.length]}/>)}
                   </Pie>
                   <Tooltip {...TTIP}/>
                 </PieChart>

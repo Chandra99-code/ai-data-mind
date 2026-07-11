@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
@@ -40,15 +40,15 @@ export default function BillingPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const rzpReady = useRazorpayScript();
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const p = await api.get("/billing/plans").then(r => r.data);
     setPlans(p.plans); setKeyId(p.razorpay_key_id); setConfigured(p.configured);
     const sub = await api.get("/billing/subscription").then(r => r.data);
     setCurrent(sub);
     const inv = await api.get("/billing/invoices").then(r => r.data);
     setInvoices(inv.items);
-  };
-  useEffect(() => { load(); }, []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
 
   const subscribe = async (planKey) => {
     if (!rzpReady) return toast.error("Razorpay is still loading…");
@@ -86,7 +86,7 @@ export default function BillingPage() {
       });
       rzp.open();
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Failed to start checkout");
+      toast.error(e?.response?.data?.detail || e?.message || "Failed to start checkout");
     } finally {
       setTimeout(() => setLoading(false), 800);
     }

@@ -15,7 +15,11 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await api.get("/auth/me");
       setUser(data);
-    } catch {
+    } catch (err) {
+      // Not authenticated (401) is the expected path on public pages — ignore.
+      if (err?.response?.status && err.response.status !== 401) {
+        console.warn("auth check failed:", err.message);
+      }
       setUser(null);
     } finally {
       setLoading(false);
@@ -37,7 +41,9 @@ export function AuthProvider({ children }) {
     return data.user;
   };
   const logout = async () => {
-    try { await api.post("/auth/logout"); } catch {}
+    try { await api.post("/auth/logout"); } catch (err) {
+      console.warn("logout endpoint failed:", err?.message);
+    }
     localStorage.removeItem("datamind_token");
     setUser(null);
   };

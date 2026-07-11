@@ -963,12 +963,16 @@ async def _ensure_razorpay_plan(plan_key: str) -> str:
     existing = await db.billing_plans.find_one({"plan_key": plan_key}, {"_id": 0})
     if existing and existing.get("razorpay_plan_id"):
         return existing["razorpay_plan_id"]
-    plan = await _rzp_call(rzp_client.plan.create, {
-        "period": "monthly", "interval": 1,
-        "item": {"name": f"DataMind AI {cfg['label']}", "amount": cfg["amount_paise"],
-                 "currency": cfg["currency"], "description": f"{cfg['label']} monthly subscription"},
-        "notes": {"plan_key": plan_key},
-    })
+    try:
+        plan = await _rzp_call(rzp_client.plan.create, {
+            "period": "monthly", "interval": 1,
+            "item": {"name": f"DataMind AI {cfg['label']}", "amount": cfg["amount_paise"],
+                     "currency": cfg["currency"], "description": f"{cfg['label']} monthly subscription"},
+            "notes": {"plan_key": plan_key},
+        })
+    except Exception as e:
+        logger.exception("razorpay plan.create")
+        raise HTTPException(502, f"Razorpay error: {e}")
     await db.billing_plans.update_one(
         {"plan_key": plan_key},
         {"$set": {"plan_key": plan_key, "razorpay_plan_id": plan["id"],
@@ -1027,6 +1031,8 @@ async def create_subscription(body: SubscribeIn, user=Depends(get_current_user))
             "notes": {"user_id": user["user_id"], "plan_key": plan_key,
                       "email": user.get("email", "")},
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("razorpay subscription.create")
         raise HTTPException(502, f"Razorpay error: {e}")
