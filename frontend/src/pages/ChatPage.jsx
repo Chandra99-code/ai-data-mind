@@ -25,6 +25,8 @@ export default function ChatPage() {
   const [convList, setConvList] = useState([]);
   const [models, setModels] = useState([]);
   const [modelKey, setModelKey] = useState("claude");
+  const [agents, setAgents] = useState([]);
+  const [agentKey, setAgentKey] = useState("copilot");
   const bottomRef = useRef(null);
   const idBase = useRef(0);
   const nextId = () => (++idBase.current);
@@ -35,6 +37,7 @@ export default function ChatPage() {
   useEffect(() => {
     api.get("/datasets").then(r => setDatasets(r.data));
     api.get("/models").then(r => { setModels(r.data.models); setModelKey(r.data.default); });
+    api.get("/agents").then(r => setAgents(r.data.agents));
     refreshList();
   }, [refreshList]);
   useEffect(() => {
@@ -66,7 +69,7 @@ export default function ChatPage() {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         credentials: "include",
-        body: JSON.stringify({ message, dataset_id: datasetId || null, conversation_id: conv, model: modelKey }),
+        body: JSON.stringify({ message, dataset_id: datasetId || null, conversation_id: conv, model: modelKey, agent: agentKey }),
       });
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -134,12 +137,16 @@ export default function ChatPage() {
 
       {/* Main chat */}
       <section className="card-surface flex flex-col min-h-0">
-        <div className="p-4 border-b border-white/[0.06] flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="p-4 border-b border-white/[0.06] flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
             <MessageSquare className="h-4 w-4 text-indigo-400"/>
             <span className="text-sm">DataMind AI</span>
+            <select value={agentKey} onChange={e=>setAgentKey(e.target.value)} data-testid="chat-agent-select"
+              className="rounded-full bg-white/[0.03] border border-white/10 text-neutral-200 text-[11px] font-mono px-2 py-1 focus:outline-none focus:border-indigo-400 transition-colors">
+              {agents.map(a => <option key={a.key} value={a.key} className="bg-[#151619]">{a.emoji} {a.label}</option>)}
+            </select>
             <select value={modelKey} onChange={e=>setModelKey(e.target.value)} data-testid="chat-model-select"
-              className="ml-2 rounded-full bg-indigo-500/15 border border-indigo-500/25 text-indigo-200 text-[11px] font-mono px-2 py-1 focus:outline-none focus:border-indigo-400 transition-colors">
+              className="rounded-full bg-indigo-500/15 border border-indigo-500/25 text-indigo-200 text-[11px] font-mono px-2 py-1 focus:outline-none focus:border-indigo-400 transition-colors">
               {models.map(m => <option key={m.key} value={m.key} className="bg-[#151619] text-neutral-200">{m.label}</option>)}
             </select>
           </div>

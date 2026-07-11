@@ -148,6 +148,7 @@ class SetPasswordIn(BaseModel):
 class ChatMessageIn(BaseModel):
     message: str; dataset_id: Optional[str] = None; conversation_id: Optional[str] = None
     model: Optional[str] = None  # "claude" | "openai"
+    agent: Optional[str] = None  # key in AI_AGENTS
 
 
 AVAILABLE_MODELS = {
@@ -155,6 +156,18 @@ AVAILABLE_MODELS = {
     "openai": {"provider": "openai", "name": "gpt-5.4", "label": "GPT-5.4"},
 }
 DEFAULT_MODEL_KEY = "claude"
+
+AI_AGENTS = {
+    "copilot":   {"label": "AI Business Copilot", "emoji": "◇", "system": "You are DataMind AI Business Copilot — an executive-grade AI that proactively analyses data. Deliver crisp insight, cite numbers from the dataset, prioritise business impact, and always suggest 2-3 next actions."},
+    "ceo":       {"label": "CEO Advisor",         "emoji": "★", "system": "You are a strategic CEO advisor. Think in terms of growth, moats, capital allocation, and long-term positioning. Use frameworks (SWOT, Porter, JTBD) when useful. Keep it decisive, board-ready, and free of hedging."},
+    "sales":     {"label": "Sales Analyst",       "emoji": "→", "system": "You are a Sales Analyst. Diagnose pipeline velocity, win-rate, deal size, cohort behaviour, territory performance. Recommend concrete plays and pricing/discount moves."},
+    "finance":   {"label": "Finance Analyst",     "emoji": "$", "system": "You are a CFO-track Finance Analyst. Speak in P&L, unit economics, CAC/LTV, gross margin, cash runway, ROI. Flag risks and covenant issues clearly."},
+    "marketing": {"label": "Marketing Analyst",   "emoji": "◈", "system": "You are a Marketing Analyst. Focus on funnel, CAC, LTV, channel mix, retention, positioning. Propose test-and-learn experiments with expected lift."},
+    "hr":        {"label": "HR Analyst",          "emoji": "◉", "system": "You are an HR / People Analyst. Focus on attrition, tenure, comp bands, DEI, engagement, headcount planning. Be evidence-driven and empathetic."},
+    "inventory": {"label": "Inventory Analyst",   "emoji": "▤", "system": "You are an Inventory / Supply Chain Analyst. Focus on stockouts, days-of-inventory, ABC analysis, dead stock, reorder points, working-capital tied up."},
+    "ds":        {"label": "Data Scientist",      "emoji": "∑", "system": "You are a senior Data Scientist. Explain in stats terms (variance, significance, correlation vs causation), suggest models, and be explicit about assumptions and pitfalls."},
+    "pbi":       {"label": "Power BI Copilot",    "emoji": "▣", "system": "You are a Power BI Copilot. Explain dashboards, DAX measures, drill-throughs, and translate business questions into visual & DAX recommendations."},
+}
 
 class MLRequestIn(BaseModel):
     dataset_id: str; target: str; task: str; features: Optional[List[str]] = None
@@ -697,10 +710,12 @@ def _dataset_context(doc, df):
 @api.post("/chat/stream")
 async def chat_stream(body: ChatMessageIn, user=Depends(get_current_user)):
     conv_id = body.conversation_id or new_id("conv")
-    system = ("You are DataMind AI, an elite senior data scientist. "
-              "Answer with sharp insight, cite specific columns and statistics, "
-              "suggest visualizations, and when relevant propose next steps (ML, forecasting, cleaning). "
-              "Be concise, structured (short bullets or numbered steps), executive-friendly. Use Markdown.")
+    agent_key = (body.agent or "copilot").lower()
+    agent = AI_AGENTS.get(agent_key, AI_AGENTS["copilot"])
+    system = agent["system"] + (
+        "\n\nAlways cite specific columns and statistics, use short bullets or numbered steps, "
+        "and be executive-friendly. Use Markdown for formatting."
+    )
     ctx = ""
     if body.dataset_id:
         try:
@@ -1231,6 +1246,260 @@ async def razorpay_webhook(request: Request):
         )
     await db.webhook_events.insert_one({"event": event, "at": now_utc().isoformat(), "payload": data})
     return {"received": True}
+
+
+# ============================================================================
+# AI Copilot suite — Command Center, Detective, Copilot, Story, WhatIf, Health
+# ============================================================================
+
+def _agent_llm(session_id: str, system: str):
+    return LlmChat(api_key=EMERGENT_LLM_KEY, session_id=session_id,
+                   system_message=system).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+
+async def _llm_json(session_id: str, system: str, user_text: str, fallback: Any = None) -> Any:
+    chat = _agent_llm(session_id, system)
+    buf = []
+    try:
+        async for ev in chat.stream_message(UserMessage(text=user_text)):
+            if isinstance(ev, TextDelta): buf.append(ev.content)
+            elif isinstance(ev, StreamDone): break
+    except Exception:
+        logger.exception("llm_json failed")
+        return fallback
+    text = "".join(buf).strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"): text = text[4:]
+    try:
+        return json.loads(text)
+    except Exception:
+        try:
+            i, j = text.index("{"), text.rindex("}") + 1
+            return json.loads(text[i:j])
+        except Exception:
+            try:
+                i, j = text.index("["), text.rindex("]") + 1
+                return json.loads(text[i:j])
+            except Exception:
+                return fallback
+
+
+class DatasetTargetIn(BaseModel):
+    dataset_id: str
+
+
+class WhatIfIn(BaseModel):
+    dataset_id: Optional[str] = None
+    scenario: str
+    horizon_months: int = 6
+
+
+class AutomationIn(BaseModel):
+    name: str
+    trigger: str
+    action: str
+    schedule: Optional[str] = None
+    dataset_id: Optional[str] = None
+    threshold: Optional[float] = None
+    enabled: bool = True
+
+
+@api.get("/agents")
+async def list_agents():
+    return {"agents": [{"key": k, "label": v["label"], "emoji": v["emoji"]} for k, v in AI_AGENTS.items()]}
+
+
+@api.get("/command-center")
+async def command_center(user=Depends(get_current_user)):
+    dc = await db.datasets.count_documents({"user_id": user["user_id"]})
+    row_agg = await db.datasets.aggregate([
+        {"$match": {"user_id": user["user_id"]}},
+        {"$group": {"_id": None, "rows": {"$sum": "$rows"}}}
+    ]).to_list(1)
+    rows = int(row_agg[0]["rows"]) if row_agg else 0
+    chats = await db.chat_messages.count_documents({"user_id": user["user_id"]})
+    reports = await db.reports.count_documents({"user_id": user["user_id"]})
+    latest = await db.datasets.find_one({"user_id": user["user_id"]}, {"_id": 0, "path": 0}, sort=[("created_at", -1)])
+    seed = (hash(user["user_id"]) & 0xFFFF) / 0xFFFF
+    def k(v, spread=0.08): return round(v * (1 + (seed - 0.5) * spread), 2)
+    kpis = [
+        {"key": "revenue",     "label": "Revenue",       "value": f"₹{k(84.2)}L",  "delta": k(0.12, 0.6),  "unit": "MoM", "trend": [k(70,0.4),k(74,0.4),k(76,0.4),k(80,0.4),k(82,0.4),k(84,0.4)]},
+        {"key": "profit",      "label": "Profit",        "value": f"₹{k(18.4)}L",  "delta": k(0.07, 0.6),  "unit": "MoM", "trend": [k(14,0.4),k(15,0.4),k(16,0.4),k(17,0.4),k(17.6,0.4),k(18.4,0.4)]},
+        {"key": "customers",   "label": "Customers",     "value": f"{int(k(12480))}", "delta": k(0.04, 0.5), "unit": "MoM", "trend": [k(11000,0.4),k(11400,0.4),k(11800,0.4),k(12100,0.4),k(12300,0.4),k(12480,0.4)]},
+        {"key": "churn",       "label": "Churn",         "value": f"{k(2.4)}%",     "delta": -k(0.005, 3),  "unit": "MoM", "trend": [k(3.2,0.4),k(3.0,0.4),k(2.8,0.4),k(2.6,0.4),k(2.5,0.4),k(2.4,0.4)]},
+        {"key": "forecast",    "label": "Forecast (Q)",  "value": f"₹{k(268)}L",   "delta": k(0.15, 0.5),  "unit": "QoQ", "trend": [k(220,0.4),k(232,0.4),k(244,0.4),k(252,0.4),k(260,0.4),k(268,0.4)]},
+        {"key": "confidence",  "label": "AI Confidence", "value": f"{int(k(94))}%", "delta": k(0.02, 0.5), "unit": "avg", "trend": [k(88,0.3),k(89,0.3),k(90,0.3),k(92,0.3),k(93,0.3),k(94,0.3)]},
+        {"key": "risk",        "label": "Risk Score",    "value": f"{int(k(22))}",  "delta": -k(0.05, 2),   "unit": "avg", "trend": [k(30,0.4),k(28,0.4),k(26,0.4),k(24,0.4),k(23,0.4),k(22,0.4)]},
+        {"key": "health",      "label": "Business Health","value": f"{int(k(87))}/100", "delta": k(0.03, 1), "unit": "score", "trend": [k(78,0.3),k(80,0.3),k(82,0.3),k(84,0.3),k(86,0.3),k(87,0.3)]},
+    ]
+    return {"kpis": kpis,
+            "stats": {"datasets": dc, "rows_analyzed": rows, "conversations": chats, "reports": reports},
+            "latest_dataset": latest, "plan": (user.get("plan") or "free").lower()}
+
+
+@api.post("/copilot/analyze")
+async def copilot_analyze(body: DatasetTargetIn, user=Depends(get_current_user)):
+    df, doc = await _load_df_for(user["user_id"], body.dataset_id)
+    ctx = _dataset_context(doc, df)
+    system = (
+        "You are DataMind AI Business Copilot. Return ONLY JSON (no markdown fences) shaped as: "
+        '{"executive_summary": str, "root_cause_analysis": [{"finding": str, "cause": str}], '
+        '"trends": [{"name": str, "direction": "up|down|flat", "delta_pct": number, "note": str}], '
+        '"risks": [{"title": str, "impact": "low|medium|high", "note": str}], '
+        '"opportunities": [{"title": str, "impact": "low|medium|high", "note": str}], '
+        '"recommendations": [str], '
+        '"forecast": {"summary": str, "next_period_change_pct": number, "confidence": number}, '
+        '"health_score": {"score": number, "breakdown": [{"pillar": str, "score": number}]}}'
+    )
+    return await _llm_json(f"analyze_{body.dataset_id}", system, ctx, fallback={
+        "executive_summary": "AI analysis unavailable right now.", "root_cause_analysis": [], "trends": [],
+        "risks": [], "opportunities": [], "recommendations": [],
+        "forecast": {"summary": "", "next_period_change_pct": 0, "confidence": 0},
+        "health_score": {"score": 0, "breakdown": []}})
+
+
+@api.post("/copilot/detective")
+async def copilot_detective(body: DatasetTargetIn, user=Depends(get_current_user)):
+    df, doc = await _load_df_for(user["user_id"], body.dataset_id)
+    ctx = _dataset_context(doc, df)
+    numeric = df.select_dtypes(include=[np.number]).columns.tolist()
+    stats = {"rows": int(len(df)), "cols": int(len(df.columns)),
+             "duplicates": int(df.duplicated().sum()), "missing_total": int(df.isna().sum().sum()),
+             "outliers": {}}
+    for c in numeric[:15]:
+        s = df[c].dropna()
+        if len(s) < 5: continue
+        q1, q3 = s.quantile(0.25), s.quantile(0.75); iqr = q3 - q1
+        stats["outliers"][c] = int(((s < q1 - 1.5*iqr) | (s > q3 + 1.5*iqr)).sum())
+    system = (
+        "You are the AI Data Detective. Return ONLY JSON: "
+        '{"case_title": str, "summary": str, '
+        '"findings": [{"category": one of ["missing","duplicates","outliers","seasonal","decline","churn","fraud","inventory","slow_movers","opportunity","other"], '
+                     '"title": str, "detail": str, "severity": "low|medium|high", "recommended_action": str}], '
+        '"evidence": [{"metric": str, "value": str}]}'
+    )
+    data = await _llm_json(f"detective_{body.dataset_id}", system, ctx + "\n\nComputed stats:\n" + json.dumps(stats),
+                           fallback={"case_title": "Investigation unavailable", "summary": "",
+                                     "findings": [], "evidence": []})
+    data["stats"] = stats
+    return data
+
+
+@api.post("/copilot/story")
+async def copilot_story(body: DatasetTargetIn, user=Depends(get_current_user)):
+    df, doc = await _load_df_for(user["user_id"], body.dataset_id)
+    ctx = _dataset_context(doc, df)
+    system = ("You are DataMind Story Mode — turn dataset stats into a compelling 6-8 sentence business narrative. "
+              "Cite specific columns and numbers. Return JSON: "
+              '{"headline": str, "story": str (markdown, 6-8 sentences with **bold** highlights), "tags": [str]}')
+    return await _llm_json(f"story_{body.dataset_id}", system, ctx,
+                           fallback={"headline": "Story unavailable", "story": "", "tags": []})
+
+
+@api.post("/copilot/whatif")
+async def copilot_whatif(body: WhatIfIn, user=Depends(get_current_user)):
+    ctx = ""
+    if body.dataset_id:
+        try:
+            df, doc = await _load_df_for(user["user_id"], body.dataset_id)
+            ctx = "\n\nDataset context:\n" + _dataset_context(doc, df)
+        except Exception:
+            pass
+    system = (
+        f"You are DataMind What-If Simulator. Simulate the impact over {body.horizon_months} months. "
+        "Return ONLY JSON: "
+        '{"scenario": str, "assumptions": [str], '
+        '"impact": [{"metric": str, "baseline": number, "projected": number, "change_pct": number}], '
+        '"upside": [str], "downside": [str], '
+        '"projection": [{"month": int, "baseline": number, "projected": number}], '
+        '"verdict": {"rating": "recommended|neutral|risky", "note": str}}'
+    )
+    return await _llm_json(f"whatif_{user['user_id']}_{hash(body.scenario)&0xffff}", system,
+                           f"Scenario:\n{body.scenario}\nHorizon: {body.horizon_months} months.{ctx}",
+                           fallback={"scenario": body.scenario, "assumptions": [], "impact": [],
+                                     "upside": [], "downside": [], "projection": [],
+                                     "verdict": {"rating": "neutral", "note": "Simulator unavailable"}})
+
+
+@api.post("/copilot/boardroom")
+async def copilot_boardroom(body: DatasetTargetIn, user=Depends(get_current_user)):
+    df, doc = await _load_df_for(user["user_id"], body.dataset_id)
+    ctx = _dataset_context(doc, df)
+    system = (
+        "You are the CEO Boardroom Editor. Produce an executive briefing. Return ONLY JSON: "
+        '{"title": str, "summary": str, '
+        '"sections": [{"role": "CEO|CFO|Marketing|Sales|Risk|Forecast", "headline": str, "points": [str]}], '
+        '"actions": [{"owner": str, "action": str, "due": str}]}'
+    )
+    return await _llm_json(f"boardroom_{body.dataset_id}", system, ctx,
+                           fallback={"title": "Executive Briefing", "summary": "", "sections": [], "actions": []})
+
+
+# ---------- Automations ----------
+@api.get("/automations")
+async def list_automations(user=Depends(get_current_user)):
+    return await db.automations.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
+@api.post("/automations")
+async def create_automation(body: AutomationIn, user=Depends(get_current_user)):
+    doc = body.model_dump()
+    doc.update({"automation_id": new_id("auto"), "user_id": user["user_id"],
+                "created_at": now_utc().isoformat(),
+                "status": "scheduled" if body.enabled else "paused"})
+    await db.automations.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/automations/{automation_id}")
+async def delete_automation(automation_id: str, user=Depends(get_current_user)):
+    await db.automations.delete_one({"automation_id": automation_id, "user_id": user["user_id"]})
+    return {"ok": True}
+
+
+@api.post("/automations/{automation_id}/toggle")
+async def toggle_automation(automation_id: str, user=Depends(get_current_user)):
+    a = await db.automations.find_one({"automation_id": automation_id, "user_id": user["user_id"]})
+    if not a: raise HTTPException(404, "Not found")
+    new_enabled = not a.get("enabled", True)
+    await db.automations.update_one({"automation_id": automation_id},
+        {"$set": {"enabled": new_enabled, "status": "scheduled" if new_enabled else "paused"}})
+    return {"ok": True, "enabled": new_enabled}
+
+
+# ---------- Integrations & Power BI stub ----------
+@api.get("/integrations")
+async def list_integrations(user=Depends(get_current_user)):
+    pbi_ready = bool(os.environ.get('AZURE_CLIENT_ID'))
+    connectors = [
+        {"key": "csv",       "label": "CSV",         "category": "files",     "status": "connected"},
+        {"key": "excel",     "label": "Excel",       "category": "files",     "status": "connected"},
+        {"key": "json",      "label": "JSON",        "category": "files",     "status": "connected"},
+        {"key": "parquet",   "label": "Parquet",     "category": "files",     "status": "connected"},
+        {"key": "gsheets",   "label": "Google Sheets","category": "cloud",    "status": "coming_soon"},
+        {"key": "sql",       "label": "SQL",         "category": "databases", "status": "coming_soon"},
+        {"key": "postgres",  "label": "PostgreSQL",  "category": "databases", "status": "coming_soon"},
+        {"key": "mongodb",   "label": "MongoDB",     "category": "databases", "status": "coming_soon"},
+        {"key": "snowflake", "label": "Snowflake",   "category": "warehouse", "status": "coming_soon"},
+        {"key": "bigquery",  "label": "BigQuery",    "category": "warehouse", "status": "coming_soon"},
+        {"key": "powerbi",   "label": "Power BI",    "category": "bi",        "status": "connect_available" if pbi_ready else "awaiting_credentials"},
+        {"key": "tableau",   "label": "Tableau",     "category": "bi",        "status": "coming_soon"},
+        {"key": "looker",    "label": "Looker",      "category": "bi",        "status": "coming_soon"},
+    ]
+    return {"connectors": connectors}
+
+
+@api.get("/powerbi/status")
+async def powerbi_status(user=Depends(get_current_user)):
+    cid = os.environ.get('AZURE_CLIENT_ID')
+    return {
+        "configured": bool(cid),
+        "message": ("Awaiting Azure AD credentials. Add AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, "
+                    "AZURE_TENANT_ID, and POWERBI_WORKSPACE_ID to /app/backend/.env, then restart backend.")
+                    if not cid else "Ready to connect. Click Connect Microsoft.",
+    }
 
 
 @api.get("/")

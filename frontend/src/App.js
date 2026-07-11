@@ -13,6 +13,13 @@ import ResetPassword from "@/pages/ResetPassword";
 import VerifyEmail from "@/pages/VerifyEmail";
 import DashboardLayout from "@/pages/DashboardLayout";
 import DashboardHome from "@/pages/DashboardHome";
+import CommandCenter from "@/pages/CommandCenter";
+import CopilotPage from "@/pages/CopilotPage";
+import DetectivePage from "@/pages/DetectivePage";
+import WhatIfPage from "@/pages/WhatIfPage";
+import BoardroomPage from "@/pages/BoardroomPage";
+import AutomationsPage from "@/pages/AutomationsPage";
+import IntegrationsPage from "@/pages/IntegrationsPage";
 import DatasetsPage from "@/pages/DatasetsPage";
 import DatasetDetail from "@/pages/DatasetDetail";
 import ChatPage from "@/pages/ChatPage";
@@ -48,7 +55,14 @@ function AppRouter() {
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/app" element={<Protected><DashboardLayout /></Protected>}>
-        <Route index element={<DashboardHome />} />
+        <Route index element={<CommandCenter />} />
+        <Route path="home" element={<DashboardHome />} />
+        <Route path="copilot" element={<CopilotPage />} />
+        <Route path="detective" element={<DetectivePage />} />
+        <Route path="whatif" element={<WhatIfPage />} />
+        <Route path="boardroom" element={<BoardroomPage />} />
+        <Route path="automations" element={<AutomationsPage />} />
+        <Route path="integrations" element={<IntegrationsPage />} />
         <Route path="datasets" element={<DatasetsPage />} />
         <Route path="datasets/:id" element={<DatasetDetail />} />
         <Route path="chat" element={<ChatPage />} />

@@ -1,16 +1,23 @@
 import React, { useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound, Settings, CreditCard } from "lucide-react";
+import { Home, Database, MessageSquare, Sparkles, FileBarChart2, LogOut, Bell, KeyRound, Settings, CreditCard, Search, GitBranch, Plug, Zap } from "lucide-react";
 import ChangePasswordDialog from "@/components/app/ChangePasswordDialog";
+import FloatingAssistant from "@/components/app/FloatingAssistant";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 
 const nav = [
-  { to: "/app", icon: Home, label: "Overview", end: true, testid: "nav-overview" },
-  { to: "/app/datasets", icon: Database, label: "Datasets", testid: "nav-datasets" },
+  { to: "/app", icon: Home, label: "Command Center", end: true, testid: "nav-command" },
+  { to: "/app/copilot", icon: Sparkles, label: "AI Copilot", testid: "nav-copilot" },
+  { to: "/app/detective", icon: Search, label: "Data Detective", testid: "nav-detective" },
   { to: "/app/chat", icon: MessageSquare, label: "AI Chat", testid: "nav-chat" },
+  { to: "/app/datasets", icon: Database, label: "Datasets", testid: "nav-datasets" },
   { to: "/app/ml", icon: Sparkles, label: "ML Studio", testid: "nav-ml" },
+  { to: "/app/whatif", icon: GitBranch, label: "What-If", testid: "nav-whatif" },
+  { to: "/app/boardroom", icon: FileBarChart2, label: "Boardroom", testid: "nav-boardroom" },
   { to: "/app/reports", icon: FileBarChart2, label: "Reports", testid: "nav-reports" },
+  { to: "/app/automations", icon: Zap, label: "Automations", testid: "nav-automations" },
+  { to: "/app/integrations", icon: Plug, label: "Integrations", testid: "nav-integrations" },
 ];
 
 export default function DashboardLayout() {
@@ -98,6 +105,7 @@ export default function DashboardLayout() {
         <div className="p-8">
           <Outlet />
         </div>
+        <FloatingAssistant/>
       </main>
     </div>
   );
